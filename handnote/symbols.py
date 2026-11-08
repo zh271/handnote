@@ -449,12 +449,16 @@ def _align_to_guide(polys: list[tuple[np.ndarray, bool]], h: int, w: int,
 
 def _cell_glyph(crop: np.ndarray, upem: int, threshold: int,
                 target: GuideBox | None = None,
-                keep: float = 1.0) -> tuple[TTGlyphPen, int, int] | None:
+                keep: float = 1.0, *, cjk: bool = False
+                ) -> tuple[TTGlyphPen, int, int] | None:
     """Trace one cell crop into a glyph; returns (pen, advance, lsb).
 
     With a guide ``target`` box the ink is aligned to it (see
     :func:`_align_to_guide`) and keeps its height above the baseline;
     without one every glyph is set on a fixed bottom line, as before.
+    ``cjk=True`` maps the whole cell onto the ideographic em box (top at
+    ``0.88 upem``) with a fixed ``upem`` advance and no horizontal shift, so
+    where the character was written inside its cell is kept.
     """
     ink = (crop < threshold).astype(np.uint8)
     if ink.sum() < 12:
@@ -477,8 +481,8 @@ def _cell_glyph(crop: np.ndarray, upem: int, threshold: int,
         polys.append((approx, is_hole))
     if not polys:
         return None
-    aligned = target is not None and keep < 1.0
-    base_y = 0.9 * h
+    aligned = target is not None and keep < 1.0 and not cjk
+    base_y = 0.88 * h if cjk else 0.9 * h
     if aligned:
         polys = _align_to_guide(polys, h, w, target, keep)
         base_y = target[4] * h
@@ -491,8 +495,11 @@ def _cell_glyph(crop: np.ndarray, upem: int, threshold: int,
     polys = mapped_polys
 
     all_pts = np.vstack([p for p, _ in polys])
-    dx = 60 - float(all_pts[:, 0].min())
-    dy = 0.0 if aligned else 60 - float(all_pts[:, 1].min())
+    if cjk:
+        dx = dy = 0.0
+    else:
+        dx = 60 - float(all_pts[:, 0].min())
+        dy = 0.0 if aligned else 60 - float(all_pts[:, 1].min())
     pen = TTGlyphPen(None)
     for points, is_hole in polys:
         points = points + np.array([dx, dy])
@@ -501,6 +508,8 @@ def _cell_glyph(crop: np.ndarray, upem: int, threshold: int,
         if (area > 0) != want_positive:
             points = points[::-1]
         _emit_contour(pen, points)
+    if cjk:
+        return pen, upem, int(round(float(all_pts[:, 0].min())))
     width = float((all_pts[:, 0] + dx).max())
     advance = int(round(width + 60))
     return pen, advance, 60
@@ -617,6 +626,31 @@ def assemble_font(
         cmap[ord(cell.char)] = name
         built.append(cell.char)
 
+    out = write_font(out_path, glyphs, metrics, cmap, alternates, upem=upem, family=family)
+    return {
+        "font": str(out),
+        "glyphs": len(built),
+        "missing": missing,
+        "chars": "".join(built),
+        "sets": max([1] + [1 + len(alts) for alts in alternates.values()]),
+        "alternates": sum(len(alts) for alts in alternates.values()),
+    }
+
+
+def write_font(
+    out_path: str | Path,
+    glyphs: dict[str, object],
+    metrics: dict[str, tuple[int, int]],
+    cmap: dict[int, str],
+    alternates: dict[str, list[str]],
+    *,
+    upem: int = 1000,
+    family: str = "HandNote Symbols",
+) -> Path:
+    """Write traced glyphs (``uniXXXX`` and ``uniXXXX.sN``) as a TTF.
+
+    Alternates become ``rand``/``calt`` lookups (see :mod:`.opentype`).
+    """
     def order_key(glyph_name: str) -> tuple[int, int]:
         base, _, suffix = glyph_name.partition(".s")
         return int(suffix or 0), int(base[3:], 16)
@@ -644,14 +678,7 @@ def assemble_font(
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     fb.save(str(out))
-    return {
-        "font": str(out),
-        "glyphs": len(built),
-        "missing": missing,
-        "chars": "".join(built),
-        "sets": max([1] + [1 + len(alts) for alts in alternates.values()]),
-        "alternates": sum(len(alts) for alts in alternates.values()),
-    }
+    return out
 
 
 def build_font(
@@ -737,8 +764,12 @@ def merge_fonts(
     By default base glyphs win on conflict. With ``replace=True`` every code
     point the overlay carries (only what was handwritten) is remapped to the
     handwritten glyph, fitted to the old glyph's box; the old glyph stays in
-    the font for composites and GSUB, and code points the overlay lacks, such
-    as every CJK character, are untouched.
+    the font for composites and GSUB, and code points the overlay lacks are
+    untouched.
+
+    CJK ideographs are not fitted one by one: a single scale maps the
+    overlay's typical ideograph box onto the base font's, so the writer's
+    size differences between characters survive.
     """
     from copy import deepcopy
 
@@ -763,16 +794,21 @@ def merge_fonts(
 
     upem = base["head"].unitsPerEm
     replaced: list[str] = []
+    cjk = _cjk_transform(base, extra) if any(map(_is_cjk, extra_cmap)) else None
 
     def copy_glyph(src_name: str, want: str, fit_to: str | None = None,
-                   fit_like: str | None = None) -> str:
+                   fit_like: str | None = None, ideograph: bool = False) -> str:
         new_name = want
         n = 1
         while new_name in taken:
             new_name = f"{want}_{n}"
             n += 1
-        fitted = (_fit_glyph(extra["glyf"], src_name, glyf, hmtx, fit_to, upem, fit_like)
-                  if fit_to else None)
+        if ideograph and cjk is not None:
+            advance = hmtx[fit_to][0] if fit_to else upem
+            fitted = _place_ideograph(extra, src_name, cjk, advance)
+        else:
+            fitted = (_fit_glyph(extra["glyf"], src_name, glyf, hmtx, fit_to, upem, fit_like)
+                      if fit_to else None)
         if fitted is None:
             glyf.glyphs[new_name] = deepcopy(extra["glyf"][src_name])
             hmtx.metrics[new_name] = extra["hmtx"][src_name]
@@ -790,7 +826,8 @@ def merge_fonts(
             skipped.append(chr(code))
             continue
         want = name if name not in taken else f"hn{code:04X}"
-        new_name = copy_glyph(name, want, fit_to=old)
+        ideograph = _is_cjk(code)
+        new_name = copy_glyph(name, want, fit_to=old, ideograph=ideograph)
         mapping[code] = new_name
         (replaced if old is not None else added).append(chr(code))
         alts = extra_alts.get(name, [])
@@ -798,7 +835,7 @@ def merge_fonts(
             # Alternates reuse the first set's scale, so the size variation
             # between sets survives the fit.
             new_alts[new_name] = [copy_glyph(alt, f"{new_name}.s{n}", fit_to=old,
-                                             fit_like=name)
+                                             fit_like=name, ideograph=ideograph)
                                   for n, alt in enumerate(alts, 1)]
     base.setGlyphOrder(order)
     base["maxp"].numGlyphs = len(order)
@@ -826,6 +863,60 @@ def merge_fonts(
             "chars": "".join(added), "kept": "".join(skipped),
             "replaced": len(replaced), "replaced_chars": "".join(replaced),
             "alternates": sum(len(alts) for alts in new_alts.values())}
+
+
+def _is_cjk(code: int) -> bool:
+    return (0x3400 <= code <= 0x9FFF or 0xF900 <= code <= 0xFAFF
+            or 0x20000 <= code <= 0x2FFFF)
+
+
+def _median_ideograph_box(font) -> tuple[float, float, float, float] | None:
+    """Median ink box over (up to 400 of) the font's CJK ideographs."""
+    table = font["glyf"]
+    codes = sorted(c for c in (font.getBestCmap() or {}) if _is_cjk(c))
+    if not codes:
+        return None
+    cmap = font.getBestCmap()
+    step = max(1, len(codes) // 400)
+    boxes = [b for c in codes[::step] if (b := _glyph_bounds(table, cmap[c])) is not None]
+    if not boxes:
+        return None
+    arr = np.array(boxes, dtype=np.float64)
+    return tuple(float(v) for v in np.median(arr, axis=0))
+
+
+def _cjk_transform(base, extra) -> tuple[float, float, float]:
+    """``(scale, dy, src_centre_x)`` taking overlay ideographs onto the base's."""
+    src_upem = extra["head"].unitsPerEm
+    dst_upem = base["head"].unitsPerEm
+    src = _median_ideograph_box(extra)
+    dst = _median_ideograph_box(base)
+    if src is None or dst is None:
+        return dst_upem / src_upem, 0.0, src_upem / 2
+    sh = src[3] - src[1]
+    dh = dst[3] - dst[1]
+    scale = dh / sh if sh > 0 else dst_upem / src_upem
+    scale = min(max(scale, 0.3 * dst_upem / src_upem), 3.0 * dst_upem / src_upem)
+    dy = (dst[1] + dst[3]) / 2 - scale * (src[1] + src[3]) / 2
+    return scale, dy, src_upem / 2
+
+
+def _place_ideograph(extra, src_name: str, transform: tuple[float, float, float],
+                     advance: int) -> tuple[object, tuple[int, int]] | None:
+    """Move one overlay ideograph into the base font's em box, centred in ``advance``."""
+    from fontTools.pens.transformPen import TransformPen
+
+    table = extra["glyf"]
+    if _glyph_bounds(table, src_name) is None:
+        return None
+    scale, dy, centre = transform
+    dx = advance / 2 - scale * centre
+    pen = TTGlyphPen(None)
+    table[src_name].draw(TransformPen(pen, (scale, 0, 0, scale, dx, dy)), table)
+    glyph = pen.glyph()
+    glyph.recalcBounds(None)
+    lsb = int(glyph.xMin) if glyph.numberOfContours else 0
+    return glyph, (int(advance), lsb)
 
 
 def _glyph_bounds(table, name: str) -> tuple[float, float, float, float] | None:

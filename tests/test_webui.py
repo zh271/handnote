@@ -233,3 +233,63 @@ def test_template_json_with_sets(server):
         server, "/api/symbols/template.json?cell_mm=12&dpi=150&sets=2")
     assert status == 200
     assert json.loads(body)["sets"] == 2
+
+
+@pytest.fixture
+def toy_hanzi():
+    from test_hanzi import _toy
+
+    from handnote import hanzi_data
+
+    original = hanzi_data._LOADED
+    hanzi_data.set_default(_toy())
+    yield hanzi_data._LOADED
+    hanzi_data.set_default(original)
+
+
+def test_hanzi_page(server):
+    status, _headers, body = _request(server, "/hanzi")
+    assert status == 200
+    assert b"/static/hanzi.js" in body and b"/static/pad.js" in body
+    for name in ("hanzi.js", "pad.js", "hanzi.css"):
+        assert _request(server, f"/static/{name}")[0] == 200
+
+
+def test_hanzi_api(server, toy_hanzi):
+    import time
+
+    from test_hanzi import _capture
+
+    def post(path, body):
+        status, _h, raw = _request(server, path, data=json.dumps(body).encode(),
+                                   headers={"Content-Type": "application/json"})
+        assert status == 200, raw
+        return json.loads(raw)
+
+    assert json.loads(_request(server, "/api/hanzi/status")[2])["available"]
+    info = json.loads(_request(server, "/api/hanzi/char?c=%E6%B8%85")[2])["清"]
+    assert info["strokes"] == 7 and [p["key"] for p in info["parts"]] == ["氵", "青"]
+
+    capture = _capture(toy_hanzi, "清工")
+    first = capture["chars"][0]
+    assert post("/api/hanzi/check", {"char": first["char"], "strokes": first["strokes"]})["ok"]
+    bad = post("/api/hanzi/check", {"char": "清", "strokes": first["strokes"][:2]})
+    assert not bad["ok"] and "标准 7 笔" in bad["reason"]
+
+    plan = post("/api/hanzi/plan", {"capture": capture, "n": 5})
+    assert plan["written"] == 2 and plan["available"] >= 3 and plan["total"] == 3755
+    preview = post("/api/hanzi/preview", {"capture": capture, "chars": "江汁"})
+    by_char = {item["char"]: item for item in preview["chars"]}
+    assert by_char["江"]["ok"] and by_char["江"]["variants"][0]["png"].startswith("data:image/png")
+    assert not by_char["汁"]["ok"]
+
+    job = post("/api/hanzi/build", {"capture": capture, "sets": 1, "merge": True})["job"]
+    for _ in range(300):
+        status = json.loads(_request(server, f"/api/hanzi/build/{job}")[2])
+        if status["state"] != "running":
+            break
+        time.sleep(0.2)
+    assert status["state"] == "done", status
+    report = status["report"]
+    assert report["written"] == 2 and report["merged_replaced"] >= 3
+    assert _request(server, report["url"])[0] == 200

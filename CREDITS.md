@@ -45,6 +45,24 @@ Pillow 和 Matplotlib 的 wheel 内置了 [FreeType](https://freetype.org/)（Da
 | STIX | 手写字体缺符号时 mathtext 的回退字形；handnote 会把它变形后再画 | STI Pub Companies | STIX Font License | <https://www.stixfonts.org/> |
 | DejaVu Sans | 测试中模拟“手写”填格、采集页描红字 | Bitstream（Vera）与 DejaVu 贡献者 | Bitstream Vera License，DejaVu 修改部分为公有领域 | <https://dejavu-fonts.github.io/> |
 
+## 数据
+
+`python -m handnote hanzi fetch`（或手写汉字页第一次打开时）下载到本机缓存，不随仓库分发：
+
+| 数据 | 用途 | 作者 | 许可 | 地址 |
+|---|---|---|---|---|
+| makemeahanzi `dictionary.txt` | 汉字的部件结构（IDS）、每一笔属于哪个部件 | Shaunak Kishore 及贡献者；源自 Unihan 与 CJKlib | LGPL-3.0 或更高版本 | <https://github.com/skishore/makemeahanzi> |
+| makemeahanzi `graphics.txt` | 每一笔的中线坐标：用于描红、笔顺校验和部件位置 | Shaunak Kishore 及贡献者；源自文鼎（Arphic）字体 | Arphic Public License | <https://github.com/skishore/makemeahanzi> |
+
+handnote 只把这些数据当作参照（结构、笔顺、部件外框），生成的字形本身来自你的笔迹。
+
+手写汉字“写一部分、按部件拼出其余”的思路参考了：
+
+- IBM：*Easy generation of personal Chinese handwritten fonts*（ICME 2011）：用户写约 20% 的字，按部首组合模型切分后复用。
+- 北京大学 EasyFont / FlexiFont（SIGGRAPH Asia 2016、ACM TOG 2018）：在笔画层面对齐楷体参考字并学习书写风格，<https://www.icst.pku.edu.cn/zlian/EasyFont/>。
+
+两者都没有公开代码，handnote 的实现是独立编写的。
+
 ## 生成的字体
 
 - 不加 `--merge` 构建出的符号字体，字形全部来自你自己的笔迹。

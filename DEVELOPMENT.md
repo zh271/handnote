@@ -39,6 +39,8 @@ handnote/
   opentype.py     GSUB 读写：rand / calt 变体
   symbols.py      模板生成、cv2 描摹、assemble_font、merge_fonts
   capture.py      浏览器笔画 JSON 校验、光栅化、build_capture_font
+  hanzi_data.py   makemeahanzi 下载、压缩缓存、IDS 解析、部件笔画与外框
+  hanzi.py        手写汉字：笔顺校验、拆部件、拼合、推荐、build_hanzi_font
   fonts.py        字体缓存目录与下载源
   cli.py          命令行入口（python -m handnote）
   webui/          stdlib HTTP 服务 + 原生 JS 页面（无构建步骤）
@@ -94,13 +96,29 @@ symbols template ──▶ PDF + spec.json
 - 合并默认只补基础字体缺的码位。`replace=True` 只把手写过的码位指向手写字形，不删旧字形，并把手写字形缩放到旧字形的框里。
 - 手写多套写成 `uniXXXX.sN` 字形 + `rand`（AlternateSubst）+ `calt`（ChainContextSubst）。合并后 `post` 表降为 3.0，字形名不可靠，渲染器只从 `rand` 读取变体。
 
+### 手写汉字链路
+
+```
+/hanzi 逐笔书写 ──▶ hanzi.json ──harvest──▶ 部件实例库 ──Composer──▶ 每个目标字的笔画
+                                   ▲                                   │
+                     makemeahanzi：IDS + 每笔所属部件 + 笔画中线        rasterize_strokes → _cell_glyph(cjk=True)
+                                                                       │
+                                               write_font → merge_fonts（CJK 全局对齐）
+```
+
+- `hanzi_data` 把 makemeahanzi 的坐标换到写字格（`u = x/1024`，`v = (900-y)/1024`），描红也按这个画，所以第 i 笔可以直接对上标准第 i 笔。
+- `match_strokes` 只要求笔数相等、逐笔起止点接近；不合格的字整字使用，不拆。
+- `Composer` 把实例从“源字里该部件的标准外框”映射到“目标字里该部件的标准外框”，所以位置由标准字形决定，书写偏差随实例带过去。规则和阈值见 [docs/formats.md](docs/formats.md#6-手写汉字采集)。
+- `recommend` 按结构贪心（新增可拼合的字数 ÷ 笔画数^0.7），末尾用参考笔画模拟一次，补上几何上拼不出的字。
+- 合并时 CJK 码位用一个全局缩放对齐基础字体的字身（`symbols._cjk_transform`），不逐字套旧字形的框。
+
 ### Web 服务
 
 `handnote/webui/server.py` 基于 `http.server`，单进程，只监听 `127.0.0.1`。matplotlib 的 rcParams 是全局状态，渲染入口用模块级锁串行化。
 
 | 路由 | 作用 |
 |---|---|
-| `GET /`、`GET /capture` | 渲染器页面、手写采集页 |
+| `GET /`、`GET /capture`、`GET /hanzi` | 渲染器页面、手写符号采集页、手写汉字页 |
 | `GET /static/<file>` | 页面的 JS / CSS |
 | `GET /api/state` | 默认配置、字体列表 |
 | `POST /api/render` | `{markdown, config}` → 预览图 URL、PDF URL、缺字报告 |
@@ -112,6 +130,13 @@ symbols template ──▶ PDF + spec.json
 | `GET /api/guide-font` | 采集页用的描红字体（按字符子集化） |
 | `POST /api/symbols/capture` | 提交笔画 JSON，构建并可选合并、替换 |
 | `GET /api/font-file/<name>` | 下载构建好的字体 |
+| `GET /api/hanzi/status`、`GET /api/hanzi/char?c=…` | 笔顺数据是否已下载；字的笔数、中线、部件（第一次调用会下载数据） |
+| `POST /api/hanzi/check` | 单字笔顺校验 |
+| `POST /api/hanzi/plan` | 覆盖率与推荐要写的字 |
+| `POST /api/hanzi/preview` | 拼合预览（PNG data URL）与部件来源 |
+| `POST /api/hanzi/build`、`GET /api/hanzi/build/<id>` | 后台构建手写汉字字体，轮询进度 |
+
+汉字相关路由在 `webui/hanzi_api.py`，`server.py` 只做转发。
 
 上传和构建产物写到当前目录的 `var/uploads/`（已在 `.gitignore`）。
 
@@ -181,6 +206,7 @@ python -m pytest tests/test_answer_skill.py -q
 | 缺字报告 | 完成 | `tests/test_render.py::test_coverage_flags_missing_symbol` |
 | 符号模板、扫描 → TTF → 合并 | 完成 | `tests/test_symbols.py` |
 | 浏览器笔画 → TTF | 完成 | `tests/test_capture.py` |
+| 手写汉字：校验、拆部件、拼合、推荐、建字体 | 完成 | `tests/test_hanzi.py`、`tests/test_webui.py::test_hanzi_api` |
 | 描红对齐、手写替换 | 完成 | `tests/test_align.py`、`tests/test_replace.py` |
 | 合成多套、手写多套（`rand` / `calt`） | 完成 | `tests/test_variants.py`、`tests/test_sets.py` |
 | 答题 skill 白名单可渲染 | 完成 | `tests/test_answer_skill.py` |

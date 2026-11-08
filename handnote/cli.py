@@ -168,6 +168,44 @@ def cmd_fonts(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hanzi(args: argparse.Namespace) -> int:
+    from . import hanzi, hanzi_data
+
+    if args.hanzi_command == "fetch":
+        print(hanzi_data.fetch(force=args.force))
+        return 0
+    data = hanzi_data.load()
+    capture = None
+    if getattr(args, "capture", None):
+        text = sys.stdin.read() if args.capture == "-" else Path(args.capture).read_text(
+            encoding="utf-8")
+        capture = json.loads(text)
+    if args.hanzi_command == "plan":
+        lib = hanzi.harvest(capture, data) if capture else hanzi.Library()
+        prefer = Path(args.prefer).read_text(encoding="utf-8") if args.prefer else ""
+        cov = hanzi.coverage(lib, data)
+        report = {k: v for k, v in cov.items() if k != "missing"}
+        report["next"] = "".join(hanzi.recommend(lib, data, n=args.n, prefer=prefer))
+        report["unsplit"] = {ch: res.reason for ch, by in lib.checks.items()
+                             for res in by.values() if not res.ok}
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        return 0
+    out = Path(args.out)
+    raw = out.with_name(out.stem + "-hanzi.ttf") if args.merge else out
+    report = hanzi.build_hanzi_font(capture, raw, data=data, sets=args.sets)
+    if args.merge and report["glyphs"]:
+        merged = merge_fonts(args.merge, raw, out, replace=args.replace,
+                             family_suffix=" Hand")
+        report["merged_into"] = args.merge
+        report["merged_added"] = merged["added"]
+        report["merged_replaced"] = merged["replaced"]
+        report["merged_alternates"] = merged["alternates"]
+        report["font"] = str(out)
+    report.pop("chars", None)
+    print(json.dumps(report, ensure_ascii=False, indent=1))
+    return 0 if report["glyphs"] else 1
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .webui.server import serve
 
@@ -249,6 +287,27 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("action", choices=["list", "fetch"], nargs="?", default="list")
     f.add_argument("names", nargs="*", help=f"font keys: {', '.join(SOURCES)}")
     f.set_defaults(func=cmd_fonts)
+
+    h = sub.add_parser("hanzi", help="handwritten Chinese characters composed by component")
+    hsub = h.add_subparsers(dest="hanzi_command", required=True)
+    hf = hsub.add_parser("fetch", help="download stroke/component data (makemeahanzi)")
+    hf.add_argument("--force", action="store_true", help="download again")
+    hp = hsub.add_parser("plan", help="coverage and the next characters worth writing")
+    hp.add_argument("capture", nargs="?", help="hanzi capture JSON (default: nothing written)")
+    hp.add_argument("-n", type=int, default=100, help="how many characters to suggest")
+    hp.add_argument("--prefer", metavar="TEXT_FILE",
+                    help="favour characters that appear in this text (e.g. your notes)")
+    hb = hsub.add_parser("build", help="build a font from a hanzi capture")
+    hb.add_argument("capture", help="hanzi capture JSON, or - for stdin")
+    hb.add_argument("-o", "--out", default="out/handnote-hanzi.ttf")
+    hb.add_argument("--sets", type=int, default=3,
+                    help="variants per composed character (written ones keep their own)")
+    hb.add_argument("--merge", metavar="BASE_FONT",
+                    help="merge into a base font (glyf-based), e.g. ZhiMangXing")
+    hb.add_argument("--replace", action="store_true",
+                    help="with --merge: replace the base font's own glyphs for these characters")
+    for p in (hf, hp, hb):
+        p.set_defaults(func=cmd_hanzi)
 
     w = sub.add_parser("serve", help="start the local web UI")
     w.add_argument("--host", default="127.0.0.1")

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>handnote · 手写汉字</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/hanzi.css">
+</head>
+<body class="hanzi-page">
+<header class="bar sticky">
+  <div class="bar-left">
+    <div class="brand">handnote</div>
+    <nav class="appnav" aria-label="切换页面">
+      <a href="/">① 渲染笔记</a>
+      <a href="/capture">② 手写符号</a>
+      <a href="/hanzi" class="active" aria-current="page">③ 手写汉字</a>
+    </nav>
+  </div>
+  <div class="bar-actions">
+    <label class="field inline"><span>当前套</span>
+      <select id="set" title="同一个字可以写几遍，每遍是一套字形"></select></label>
+    <label class="field inline"><span>笔宽 <b id="width-out">0.050</b></span>
+      <input id="width" type="range" min="0.025" max="0.09" step="0.005" value="0.05"></label>
+    <button id="undo" class="btn ghost" title="撤销上一笔（Ctrl+Z）">撤销</button>
+    <button id="export" class="btn ghost">导出 JSON</button>
+    <label class="btn ghost" title="导入之前导出的 JSON">导入<input id="import" type="file" accept=".json" hidden></label>
+    <span id="status" class="status"></span>
+  </div>
+</header>
+
+<main class="hz">
+  <section class="hz-panel hz-list">
+    <h2>要写的字</h2>
+    <div class="hz-cover">
+      <div class="meter"><span id="cover-bar"></span></div>
+      <div id="cover-text" class="muted">正在统计…</div>
+    </div>
+    <div class="seg" role="group" aria-label="字表">
+      <button type="button" data-list="next" class="active" title="按能解锁多少新字排序">推荐</button>
+      <button type="button" data-list="note" title="渲染器里当前笔记用到、还不能生成的字">我的笔记</button>
+      <button type="button" data-list="done">已写</button>
+    </div>
+    <div id="chips" class="chips"></div>
+    <div class="hz-add">
+      <input id="add-chars" type="text" placeholder="输入要写的字，回车加入队列" spellcheck="false" autocomplete="off">
+    </div>
+    <p class="muted small">按标准笔顺一笔一笔写。写过的字会被拆成偏旁部件，用来拼出没写过的字；
+      推荐列表优先给出笔画少、部件常用的字。</p>
+  </section>
+
+  <section class="hz-panel hz-write">
+    <div class="hz-head">
+      <span id="char" class="hz-char">·</span>
+      <span id="strokes" class="muted"></span>
+      <span id="check" class="hz-check"></span>
+    </div>
+    <div id="pad"></div>
+    <div class="hz-tools">
+      <button id="prev" class="btn ghost" title="上一个（←）">← 上一个</button>
+      <button id="clear" class="btn ghost" title="清空这个字（本套）">清空</button>
+      <label class="check inline"><input type="checkbox" id="show-guide" checked> 描红</label>
+      <label class="check inline"><input type="checkbox" id="show-order" checked> 笔顺号</label>
+      <label class="check inline"><input type="checkbox" id="auto-next" checked> 写对自动下一个</label>
+      <button id="next" class="btn" title="下一个（→ 或 Enter）">下一个 →</button>
+    </div>
+    <div id="fetching" class="hz-fetch" hidden>
+      首次使用需要下载笔顺与部件数据（makemeahanzi，约 33MB），只下载一次。
+      <button id="fetch" class="btn primary small">下载</button>
+    </div>
+  </section>
+
+  <section class="hz-panel hz-side">
+    <h2>试合成</h2>
+    <input id="try" type="text" value="清江河湖海明暗" spellcheck="false" autocomplete="off">
+    <div id="previews" class="previews"></div>
+
+    <h2>构建字体</h2>
+    <label class="field"><span>合并到</span><select id="merge"></select></label>
+    <label class="field"><span>每个合成字的字形套数</span>
+      <select id="sets"><option>1</option><option>2</option><option selected>3</option><option>4</option></select></label>
+    <label class="check"><input type="checkbox" id="replace" checked> 替换字体里原有的汉字</label>
+    <button id="build" class="btn primary">构建字体</button>
+    <div class="meter" id="build-meter" hidden><span id="build-bar"></span></div>
+    <div id="build-result" class="muted small"></div>
+  </section>
+</main>
+
+<script src="/static/pad.js"></script>
+<script src="/static/hanzi.js"></script>
+</body>
+</html>
