@@ -44,6 +44,11 @@
     <label class="field inline" title="每个字的大小和上下位置向浅灰描红字对齐；保留的比例越高，字形变化越大，0 为完全对齐，1 为原样">
       <span>保留书写误差 <b id="keep-out">0.30</b></span>
       <input id="keep" type="range" min="0" max="1" step="0.05" value="0.3"></label>
+    <label class="field inline" title="笔宽随压力变化的幅度：0 为等宽，1 为默认，2 为明显的粗细变化。手写笔用真实压力">
+      <span>压感 <b id="pressure-out">1.0</b></span>
+      <input id="pressure" type="range" min="0" max="2" step="0.1" value="1"></label>
+    <label class="check inline" title="鼠标和手指没有压力数据：写得慢笔画粗，写得快笔画细">
+      <input type="checkbox" id="simulate" checked> 鼠标按速度模拟压感</label>
     <button id="reset-all" class="btn ghost small">清空本套</button>
   </div>
 
@@ -112,6 +117,7 @@
     </div>
   </div>
 </div>
+<script src="/static/pen.js"></script>
 <script src="/static/capture.js"></script>
 </body>
 </html>

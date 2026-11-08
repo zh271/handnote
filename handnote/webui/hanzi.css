@@ -54,6 +54,7 @@
 .pad canvas { position: absolute; inset: 0; }
 .hz-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
 .hz-tools #next { margin-left: auto; }
+.hz-tools input[type=range] { width: 80px; }
 .hz-fetch { margin-top: 10px; padding: 10px; border-radius: 6px; background: var(--accent-soft); }
 
 .previews { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; margin: 8px 0; }

@@ -106,8 +106,13 @@ def _plan(_handler, payload: dict) -> dict:
     return report
 
 
-def _png(strokes: list, size: int = 128) -> str:
-    image = Image.fromarray(rasterize_strokes(strokes, size))
+def _gain(payload: dict) -> float:
+    value = payload.get("pressure")
+    return 1.0 if value is None else min(max(float(value), 0.0), 2.0)
+
+
+def _png(strokes: list, size: int = 128, pressure: float = 1.0) -> str:
+    image = Image.fromarray(rasterize_strokes(strokes, size, pressure=pressure))
     buf = io.BytesIO()
     image.save(buf, "PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
@@ -124,7 +129,8 @@ def _preview(_handler, payload: dict) -> dict:
             result = composer.compose(ch, k)
             if result is None:
                 break
-            variants.append({"png": _png(result.strokes), "written": result.written,
+            variants.append({"png": _png(result.strokes, pressure=_gain(payload)),
+                             "written": result.written,
                              "parts": [{"key": key, "source": src, "set": s}
                                        for key, src, s in result.parts]})
         out.append({"char": ch, "ok": bool(variants), "variants": variants})
@@ -152,13 +158,13 @@ def _build(_handler, payload: dict) -> dict:
             if _JOBS[old]["state"] != "running":
                 _JOBS.pop(old)
     args = (job_id, capture, int(payload.get("sets") or 3), merge_into,
-            bool(payload.get("replace", True)), server.UPLOAD_DIR)
+            bool(payload.get("replace", True)), _gain(payload), server.UPLOAD_DIR)
     threading.Thread(target=_run_build, args=args, daemon=True).start()
     return {"job": job_id}
 
 
 def _run_build(job_id: str, capture: dict, sets: int, merge_into: str, replace: bool,
-               upload_dir: Path) -> None:
+               pressure: float, upload_dir: Path) -> None:
     def progress(done: int, total: int) -> None:
         with _JOBS_LOCK:
             _JOBS[job_id].update(done=done, total=total)
@@ -167,7 +173,8 @@ def _run_build(job_id: str, capture: dict, sets: int, merge_into: str, replace: 
         upload_dir.mkdir(parents=True, exist_ok=True)
         tag = uuid.uuid4().hex[:8]
         raw = upload_dir / f"hanzi-{tag}.ttf"
-        report = hanzi.build_hanzi_font(capture, raw, sets=sets, progress=progress)
+        report = hanzi.build_hanzi_font(capture, raw, sets=sets, pressure=pressure,
+                                        progress=progress)
         report.pop("chars", None)
         if merge_into and report["glyphs"]:
             merged = upload_dir / f"merged-{tag}.ttf"

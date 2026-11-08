@@ -370,8 +370,10 @@ class Handler(BaseHTTPRequestHandler):
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         out = UPLOAD_DIR / f"capture-{uuid.uuid4().hex[:8]}.ttf"
         keep = payload.get("keep")
+        pressure = payload.get("pressure")
         report = build_capture_font(capture, spec, out,
-                                    keep=0.3 if keep is None else float(keep))
+                                    keep=0.3 if keep is None else float(keep),
+                                    pressure=1.0 if pressure is None else float(pressure))
         merge_into = payload.get("merge")
         if merge_into is False:
             merge_into = ""

@@ -125,42 +125,72 @@ def _parse_stroke(
     return out, width
 
 
+#: Default pressure gain: width scale is ``1 + gain * 0.6 * (p - 0.5)``, i.e.
+#: 0.7x at no pressure and 1.3x at full pressure; ``0`` ignores pressure.
+DEFAULT_PRESSURE = 1.0
+MAX_PRESSURE = 2.0
+
+
+def pressure_scale(pressure: float, gain: float = DEFAULT_PRESSURE) -> float:
+    """Width multiplier for one point's pen pressure."""
+    return max(0.3, 1.0 + gain * 0.6 * (pressure - 0.5))
+
+
+def _smooth(values: list[float]) -> list[float]:
+    """Three-point moving average; keeps the ends."""
+    if len(values) < 3:
+        return values
+    return [values[0]] + [(values[i - 1] + values[i] + values[i + 1]) / 3
+                          for i in range(1, len(values) - 1)] + [values[-1]]
+
+
 def rasterize_strokes(
     strokes: Sequence[tuple[list[tuple[float, float, float]], float]],
     size: int = 256,
     *,
     default_width: float = DEFAULT_WIDTH,
+    pressure: float = DEFAULT_PRESSURE,
 ) -> np.ndarray:
-    """Draw strokes into an ``size`` square uint8 array (0 ink, 255 paper)."""
+    """Draw strokes into an ``size`` square uint8 array (0 ink, 255 paper).
+
+    The pen width follows each point's pressure (see :func:`pressure_scale`):
+    every segment is a quad between two discs whose radii come from its end
+    points, so a stroke swells and thins along its length.
+    """
     size = int(min(max(size, MIN_SIZE), MAX_SIZE))
+    gain = min(max(float(pressure), 0.0), MAX_PRESSURE)
     image = Image.new("L", (size, size), 255)
     draw = ImageDraw.Draw(image)
     for points, width in strokes:
-        pressure = sum(p for _, _, p in points) / len(points)
-        scale = 0.7 + 0.6 * pressure
-        px_width = max(1, int(round(min(max(width, 0.01), 0.2) * size * scale)))
+        base = min(max(width, 0.01), 0.2) * size / 2
         coords = [(u * size, v * size) for u, v, _ in points]
-        if len(coords) == 1:
-            x, y = coords[0]
-            radius = px_width / 2
-            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=0)
-            continue
-        draw.line(coords, fill=0, width=px_width, joint="curve")
-        radius = px_width / 2
-        for x, y in (coords[0], coords[-1]):
-            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=0)
+        radii = [max(0.5, base * pressure_scale(p, gain))
+                 for p in _smooth([p for _, _, p in points])]
+        for (x, y), r in zip(coords, radii, strict=True):
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=0)
+        segments = zip(coords[:-1], coords[1:], radii[:-1], radii[1:], strict=True)
+        for (x0, y0), (x1, y1), r0, r1 in segments:
+            length = math.hypot(x1 - x0, y1 - y0)
+            if length < 1e-6:
+                continue
+            nx, ny = -(y1 - y0) / length, (x1 - x0) / length
+            draw.polygon([(x0 + nx * r0, y0 + ny * r0), (x1 + nx * r1, y1 + ny * r1),
+                          (x1 - nx * r1, y1 - ny * r1), (x0 - nx * r0, y0 - ny * r0)],
+                         fill=0)
     return np.asarray(image)
 
 
 def capture_crops(
-    data: dict[str, Any], template: Template | dict, size: int = 256
+    data: dict[str, Any], template: Template | dict, size: int = 256,
+    pressure: float = DEFAULT_PRESSURE,
 ) -> dict[int, np.ndarray]:
     """Rasterise the first captured set, keyed by cell index."""
-    return capture_set_crops(data, template, size)[0]
+    return capture_set_crops(data, template, size, pressure)[0]
 
 
 def capture_set_crops(
-    data: dict[str, Any], template: Template | dict, size: int = 256
+    data: dict[str, Any], template: Template | dict, size: int = 256,
+    pressure: float = DEFAULT_PRESSURE,
 ) -> list[dict[int, np.ndarray]]:
     """Rasterise every captured set, in set order (gaps in numbering close up)."""
     spec = template if isinstance(template, Template) else Template.from_dict(template)
@@ -171,7 +201,7 @@ def capture_set_crops(
         for index, strokes in grouped.items():
             if index >= limit:
                 raise CaptureError(f"cell index {index} outside template (0..{limit - 1})")
-            crops[index] = rasterize_strokes(strokes, size)
+            crops[index] = rasterize_strokes(strokes, size, pressure=pressure)
         out.append(crops)
     return out
 
@@ -185,17 +215,20 @@ def build_capture_font(
     upem: int = 1000,
     family: str = "HandNote Symbols",
     keep: float = DEFAULT_KEEP,
+    pressure: float = DEFAULT_PRESSURE,
 ) -> dict:
     """Turn a capture payload into a TTF; returns the build report.
 
     ``keep`` is the share of the writer's size/position error kept after
-    aligning each glyph to the template guide (1 = raw strokes).
+    aligning each glyph to the template guide (1 = raw strokes). ``pressure``
+    is the pressure gain (0 = uniform width, see :func:`pressure_scale`).
     """
     spec = template if isinstance(template, Template) else Template.from_dict(template)
-    sets = capture_set_crops(data, spec, size)
+    sets = capture_set_crops(data, spec, size, pressure)
     report = assemble_font(sets[0], spec, out_path, upem=upem, family=family,
                            extra_sets=sets[1:], keep=keep)
     report["captured"] = len(set().union(*sets))
     report["captured_sets"] = len(sets)
     report["size"] = size
+    report["pressure"] = pressure
     return report

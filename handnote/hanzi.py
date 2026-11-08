@@ -527,6 +527,7 @@ def build_hanzi_font(
     size: int = 256,
     upem: int = 1000,
     family: str = "HandNote Hanzi",
+    pressure: float = 1.0,
     progress: Callable[[int, int], None] | None = None,
 ) -> dict:
     """Write every written or composable target as a glyph; returns a report.
@@ -562,7 +563,7 @@ def build_hanzi_font(
             if sig in seen:
                 continue
             seen.append(sig)
-            crop = rasterize_strokes(result.strokes, size)
+            crop = rasterize_strokes(result.strokes, size, pressure=pressure)
             traced = _cell_glyph(crop, upem, 128, cjk=True)
             if traced is not None:
                 shapes.append(traced)

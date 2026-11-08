@@ -147,7 +147,8 @@ def cmd_symbols_capture(args: argparse.Namespace) -> int:
         data = data["capture"]
     out = Path(args.out)
     raw = out.with_name(f"{out.stem}-symbols.ttf") if args.merge else out
-    report = build_capture_font(data, spec, raw, size=args.size, keep=args.keep)
+    report = build_capture_font(data, spec, raw, size=args.size, keep=args.keep,
+                                pressure=args.pressure)
     if args.merge and report["glyphs"]:
         merged = merge_fonts(args.merge, raw, out, replace=args.replace)
         report["merged_into"] = args.merge
@@ -192,7 +193,8 @@ def cmd_hanzi(args: argparse.Namespace) -> int:
         return 0
     out = Path(args.out)
     raw = out.with_name(out.stem + "-hanzi.ttf") if args.merge else out
-    report = hanzi.build_hanzi_font(capture, raw, data=data, sets=args.sets)
+    report = hanzi.build_hanzi_font(capture, raw, data=data, sets=args.sets,
+                                    pressure=args.pressure)
     if args.merge and report["glyphs"]:
         merged = merge_fonts(args.merge, raw, out, replace=args.replace,
                              family_suffix=" Hand")
@@ -275,6 +277,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="share of size/position error kept after aligning to the guide")
     sc.add_argument("--replace", action="store_true",
                     help="with --merge: handwritten glyphs replace the base font's own")
+    sc.add_argument("--pressure", type=float, default=1.0,
+                    help="pen pressure gain: 0 = uniform width, 1 = default, 2 = strong")
     sc.set_defaults(func=cmd_symbols_capture)
 
     ss = ssub.add_parser("simulate", help="fill a template with a font for testing")
@@ -306,6 +310,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="merge into a base font (glyf-based), e.g. ZhiMangXing")
     hb.add_argument("--replace", action="store_true",
                     help="with --merge: replace the base font's own glyphs for these characters")
+    hb.add_argument("--pressure", type=float, default=1.0,
+                    help="pen pressure gain: 0 = uniform width, 1 = default, 2 = strong")
     for p in (hf, hp, hb):
         p.set_defaults(func=cmd_hanzi)
 

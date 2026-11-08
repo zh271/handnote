@@ -178,12 +178,13 @@ def test_capture_endpoint(server):
             {"index": by_char["∪"], "strokes": [[[0.5, 0.1], [0.5, 0.9]]]},
         ],
     }
-    payload = json.dumps({"spec": spec, "capture": capture}).encode()
+    payload = json.dumps({"spec": spec, "capture": capture, "pressure": 1.5}).encode()
     status, _headers, raw = _request(server, "/api/symbols/capture", data=payload,
                                      headers={"Content-Type": "application/json"})
     assert status == 200, raw
     report = json.loads(raw)
     assert report["glyphs"] == 2
+    assert report["pressure"] == 1.5
     assert report["merged_added"] == 2
     status, _headers, font = _request(server, report["url"])
     assert status == 200
@@ -251,7 +252,7 @@ def test_hanzi_page(server):
     status, _headers, body = _request(server, "/hanzi")
     assert status == 200
     assert b"/static/hanzi.js" in body and b"/static/pad.js" in body
-    for name in ("hanzi.js", "pad.js", "hanzi.css"):
+    for name in ("hanzi.js", "pad.js", "pen.js", "hanzi.css"):
         assert _request(server, f"/static/{name}")[0] == 200
 
 
@@ -283,7 +284,8 @@ def test_hanzi_api(server, toy_hanzi):
     assert by_char["江"]["ok"] and by_char["江"]["variants"][0]["png"].startswith("data:image/png")
     assert not by_char["汁"]["ok"]
 
-    job = post("/api/hanzi/build", {"capture": capture, "sets": 1, "merge": True})["job"]
+    job = post("/api/hanzi/build", {"capture": capture, "sets": 1, "merge": True,
+                                    "pressure": 0})["job"]
     for _ in range(300):
         status = json.loads(_request(server, f"/api/hanzi/build/{job}")[2])
         if status["state"] != "running":

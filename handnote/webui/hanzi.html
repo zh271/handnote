@@ -62,6 +62,11 @@
       <label class="check inline"><input type="checkbox" id="show-guide" checked> 描红</label>
       <label class="check inline"><input type="checkbox" id="show-order" checked> 笔顺号</label>
       <label class="check inline"><input type="checkbox" id="auto-next" checked> 写对自动下一个</label>
+      <label class="field inline" title="笔宽随压力变化的幅度：0 为等宽，1 为默认，2 为明显的粗细变化。手写笔用真实压力">
+        <span>压感 <b id="pressure-out">1.0</b></span>
+        <input id="pressure" type="range" min="0" max="2" step="0.1" value="1"></label>
+      <label class="check inline" title="鼠标和手指没有压力数据：写得慢笔画粗，写得快笔画细">
+        <input type="checkbox" id="simulate" checked> 鼠标按速度模拟压感</label>
       <button id="next" class="btn" title="下一个（→ 或 Enter）">下一个 →</button>
     </div>
     <div id="fetching" class="hz-fetch" hidden>
@@ -86,6 +91,7 @@
   </section>
 </main>
 
+<script src="/static/pen.js"></script>
 <script src="/static/pad.js"></script>
 <script src="/static/hanzi.js"></script>
 </body>

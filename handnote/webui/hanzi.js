@@ -357,7 +357,7 @@ function preview() {
     const capture = payload();
     try {
       const data = await api("/api/hanzi/preview", {
-        capture: capture.chars.length ? capture : null, chars, sets: 1,
+        capture: capture.chars.length ? capture : null, chars, sets: 1, pressure: pen.gain,
       });
       host.textContent = "";
       for (const item of data.chars) {
@@ -420,6 +420,7 @@ async function build() {
     sets: Number($("sets").value),
     merge: merge === "" ? true : merge === "none" ? false : merge,
     replace: $("replace").checked,
+    pressure: pen.gain,
   };
   $("build").disabled = true;
   $("build-meter").hidden = false;
@@ -502,6 +503,10 @@ function wire() {
     $("width-out").textContent = state.width.toFixed(3);
     pad.paint(strokesOf(state.current));
     save();
+  });
+  pen.bind($("pressure"), $("pressure-out"), $("simulate"), () => {
+    pad.paint(strokesOf(state.current));
+    preview();
   });
   $("undo").addEventListener("click", undo);
   $("clear").addEventListener("click", clearCurrent);

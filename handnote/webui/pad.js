@@ -4,7 +4,7 @@
 //   pad.paint(strokes, width);   pad.guide(drawFn);   pad.width = 0.05;
 //
 // Points are [u, v, pressure] with u, v in [0, 1], origin top-left, v down;
-// the same frame the server expects for captures.
+// the same frame the server expects for captures. Needs pen.js (pressure).
 "use strict";
 
 function createPad(host, options) {
@@ -36,11 +36,12 @@ function createPad(host, options) {
 
   const dot = (ctx, p) => {
     ctx.beginPath();
-    ctx.arc(p[0] * size, p[1] * size, Math.max(1, (pad.width * size) / 2), 0, Math.PI * 2);
+    const radius = (pad.width * size * pen.scale(p[2])) / 2;
+    ctx.arc(p[0] * size, p[1] * size, Math.max(1, radius), 0, Math.PI * 2);
     ctx.fill();
   };
   const segment = (ctx, a, b) => {
-    ctx.lineWidth = Math.max(1, pad.width * size);
+    ctx.lineWidth = Math.max(1, pad.width * size * pen.scale((a[2] + b[2]) / 2));
     ctx.beginPath();
     ctx.moveTo(a[0] * size, a[1] * size);
     ctx.lineTo(b[0] * size, b[1] * size);
@@ -66,20 +67,17 @@ function createPad(host, options) {
     if (draw) draw(back.ctx, size);
   };
 
-  const pointOf = (event) => {
+  const pointOf = (event, stroke = null) => {
     const rect = front.canvas.getBoundingClientRect();
-    const pressure = event.pressure > 0 ? event.pressure : 0.5;
     const clamp = (v) => Math.min(1, Math.max(0, v));
-    return [
-      clamp((event.clientX - rect.left) / rect.width),
-      clamp((event.clientY - rect.top) / rect.height),
-      clamp(pressure),
-    ];
+    const u = clamp((event.clientX - rect.left) / (rect.width || 1));
+    const v = clamp((event.clientY - rect.top) / (rect.height || 1));
+    return [u, v, pen.pressure(event, u, v, stroke)];
   };
   const finish = (event) => {
     if (!pad.drawing) return;
-    pad.drawing.push(pointOf(event));
-    const points = pad.drawing;
+    pad.drawing.points.push(pointOf(event, pad.drawing));
+    const points = pad.drawing.points;
     pad.drawing = null;
     options.onStroke(points);
   };
@@ -88,17 +86,19 @@ function createPad(host, options) {
     event.preventDefault();
     front.canvas.setPointerCapture(event.pointerId);
     const p = pointOf(event);
-    pad.drawing = [p];
+    pad.drawing = { points: [p], t: event.timeStamp };
     front.ctx.fillStyle = ink;
     dot(front.ctx, p);
   });
   front.canvas.addEventListener("pointermove", (event) => {
     if (!pad.drawing) return;
     event.preventDefault();
-    const p = pointOf(event);
-    const last = pad.drawing[pad.drawing.length - 1];
+    const p = pointOf(event, pad.drawing);
+    const points = pad.drawing.points;
+    const last = points[points.length - 1];
     if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 0.003) return;
-    pad.drawing.push(p);
+    points.push(p);
+    pad.drawing.t = event.timeStamp;
     front.ctx.strokeStyle = ink;
     segment(front.ctx, last, p);
   });
