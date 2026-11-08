@@ -148,7 +148,7 @@ def test_symbol_build_endpoint(server):
 def test_capture_page(server):
     status, headers, body = _request(server, "/capture")
     assert status == 200
-    assert "手写采集" in body.decode("utf-8")
+    assert "手写字体" in body.decode("utf-8")
     assert b"/static/capture.js" in body
 
 

@@ -158,7 +158,11 @@ async function boot() {
     select.appendChild(option);
   });
   if (boot.defaults.font_path) select.value = boot.defaults.font_path;
-  const wanted = new URLSearchParams(window.location.search).get("font");
+  let wanted = new URLSearchParams(window.location.search).get("font");
+  if (!wanted) {
+    try { wanted = localStorage.getItem("handnote:font"); } catch (err) { wanted = null; }
+    if (wanted && ![...select.options].some((option) => option.value === wanted)) wanted = null;
+  }
   if (wanted) {
     if (![...select.options].some((option) => option.value === wanted)) {
       const option = document.createElement("option");
@@ -167,6 +171,7 @@ async function boot() {
       select.appendChild(option);
     }
     select.value = wanted;
+    try { localStorage.setItem("handnote:font", wanted); } catch (err) { /* optional */ }
   }
 
   applyConfig(boot.defaults);
@@ -181,7 +186,10 @@ async function boot() {
     el.addEventListener("input", () => { syncOutputs(); schedule(); });
     el.addEventListener("change", () => { syncOutputs(); schedule(100); });
   });
-  $("font-select").addEventListener("change", () => schedule(100));
+  $("font-select").addEventListener("change", () => {
+    try { localStorage.setItem("handnote:font", $("font-select").value); } catch (err) { /* optional */ }
+    schedule(100);
+  });
 
   let mdTimer = 0;
   $("markdown").addEventListener("input", () => {

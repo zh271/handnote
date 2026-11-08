@@ -3,19 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>handnote · 浏览器手写采集</title>
+<title>handnote · 手写字体</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/capture.css">
 </head>
-<body>
-<header class="bar">
-  <div class="brand">手写采集<span>鼠标、触控笔或手指，逐格书写</span></div>
+<body class="capture-page">
+<header class="bar sticky">
+  <div class="bar-left">
+    <div class="brand">handnote</div>
+    <nav class="appnav" aria-label="切换页面">
+      <a href="/">① 渲染笔记</a>
+      <a href="/capture" class="active" aria-current="page">② 手写字体</a>
+    </nav>
+  </div>
   <div class="bar-actions">
-    <label class="field inline"><span>当前套</span>
+    <div class="seg" role="group" aria-label="书写视图">
+      <button type="button" data-view="all" class="active">全部字符</button>
+      <button type="button" data-view="multi" title="选几个常用字，每个写多遍作为不同字形">高频字多写</button>
+    </div>
+    <label class="field inline" id="set-field"><span>当前套</span>
       <select id="set" title="同一模板可以写多套，每套作为字形变体"></select></label>
     <label class="field inline"><span>笔宽 <b id="width-out">0.050</b></span>
       <input id="width" type="range" min="0.025" max="0.09" step="0.005" value="0.05"></label>
-    <button id="undo" class="btn ghost">撤销</button>
+    <button id="zoom-open" class="btn ghost" title="一格一格放大书写">放大书写</button>
+    <button id="undo" class="btn ghost" title="撤销上一笔（Ctrl+Z）">撤销</button>
     <button id="export" class="btn ghost">导出 JSON</button>
     <button id="build" class="btn primary">构建字体</button>
     <span id="status" class="status"></span>
@@ -25,7 +36,7 @@
 <main class="capture">
   <div class="cap-note">
     <span id="progress">0 / 0</span>
-    格已写 · 数据自动存在本机浏览器 · <a href="/">回到渲染器</a>
+    格已写 · 数据自动存在本机浏览器 · 点格子右上角 ⤢ 放大书写 · Ctrl+Z 撤销
     <label class="check inline"><input type="checkbox" id="merge" checked> 合并到默认字体</label>
     <label class="check inline" title="写过的数字、字母等替换默认字体里原有的字形；没写的字符和汉字不变">
       <input type="checkbox" id="replace" checked> 手写覆盖已有字符</label>
@@ -34,9 +45,72 @@
       <input id="keep" type="range" min="0" max="1" step="0.05" value="0.3"></label>
     <button id="reset-all" class="btn ghost small">清空本套</button>
   </div>
+
+  <section id="multi" class="cap-page" hidden>
+    <h2>高频字多写 · 每个字写 3 遍以上，渲染时会在这几遍之间轮换</h2>
+    <div class="multi-bar">
+      <label class="field inline grow"><span>要多写的字</span>
+        <input id="multi-chars" type="text" spellcheck="false" autocomplete="off"></label>
+      <span id="multi-presets" class="multi-presets"></span>
+    </div>
+    <div id="multi-unknown" class="multi-unknown"></div>
+    <details id="stats" class="stats">
+      <summary>从笔记统计高频字（可选）</summary>
+      <div class="stats-body">
+        <textarea id="stats-text" spellcheck="false"
+          placeholder="默认读取渲染器里的笔记内容；也可以粘贴任意文本"></textarea>
+        <div class="stats-controls">
+          <button id="stats-reload" class="btn ghost small" type="button">重新读取笔记</button>
+          <label class="field inline"><span>排序</span>
+            <select id="stats-sort">
+              <option value="near">相近重复次数</option>
+              <option value="count">出现次数</option>
+            </select></label>
+          <label class="field inline" title="上下相隔多少行以内算相近"><span>上下行</span>
+            <input id="stats-rows" type="number" min="0" max="10" value="1"></label>
+          <label class="field inline" title="左右相隔多少个字符以内算相近"><span>左右字符</span>
+            <input id="stats-cols" type="number" min="1" max="40" value="5"></label>
+          <label class="field inline"><span>取前</span>
+            <input id="stats-top" type="number" min="1" max="100" value="20"></label>
+          <label class="check inline" title="模板里没有的字（如汉字）不能在这里写">
+            <input id="stats-template" type="checkbox" checked> 只看模板里的字</label>
+        </div>
+        <div class="stats-controls">
+          <button id="stats-copy" class="btn ghost small" type="button">复制前 N 个</button>
+          <button id="stats-fill" class="btn primary small" type="button">填入要多写的字</button>
+          <button id="stats-add" class="btn ghost small" type="button">追加到要多写的字</button>
+          <span id="stats-note" class="multi-unknown"></span>
+        </div>
+        <table class="stats-table">
+          <thead><tr><th>#</th><th>字符</th><th>出现</th><th>相近重复</th><th>模板</th></tr></thead>
+          <tbody id="stats-rows-body"></tbody>
+        </table>
+      </div>
+    </details>
+    <div id="multi-rows"></div>
+  </section>
+
   <div id="pages"></div>
   <div id="result" class="cap-result"></div>
 </main>
+
+<button id="fab-undo" class="fab" title="撤销上一笔（Ctrl+Z）">↶ 撤销</button>
+
+<div id="zoom" class="zoom" hidden>
+  <div class="zoom-box" role="dialog" aria-label="放大书写">
+    <div class="zoom-head">
+      <span id="zoom-title"></span>
+      <button id="zoom-close" class="btn ghost small" title="关闭（Esc）">关闭</button>
+    </div>
+    <div id="zoom-pad" class="zoom-pad"><span id="zoom-guide" class="guide"></span></div>
+    <div class="zoom-actions">
+      <button id="zoom-prev" class="btn ghost" title="上一格（←）">← 上一格</button>
+      <button id="zoom-undo" class="btn ghost" title="撤销上一笔（Ctrl+Z）">↶ 撤销</button>
+      <button id="zoom-clear" class="btn ghost" title="清空这一格（Delete）">清空此格</button>
+      <button id="zoom-next" class="btn primary" title="下一格（→ / 空格）">下一格 →</button>
+    </div>
+  </div>
+</div>
 <script src="/static/capture.js"></script>
 </body>
 </html>

@@ -284,3 +284,50 @@ hr {
   .layout { grid-template-columns: 1fr; height: auto; }
   .preview-wrap { min-height: 70vh; }
 }
+
+/* -- page switcher (renderer <-> handwriting font) ------------------------- */
+.bar-left { display: flex; align-items: center; gap: 18px; }
+
+.appnav {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.appnav a {
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.appnav a:hover { color: var(--accent); }
+
+.appnav a.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+}
+
+.bar.sticky { position: sticky; top: 0; z-index: 20; }
+
+.btn:disabled { opacity: .45; cursor: default; }
+
+.font-pick select { font-weight: 600; min-width: 190px; }
+.font-pick .font-edit { font-size: 12px; color: var(--accent); white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .bar { flex-wrap: wrap; }
+  .bar-actions { flex-wrap: wrap; }
+  .brand span { display: none; }
+}
+
+.bar-actions { flex-wrap: wrap; justify-content: flex-end; }
+.bar .btn, .seg button, .field.inline > span { white-space: nowrap; }
+
+[hidden] { display: none !important; }

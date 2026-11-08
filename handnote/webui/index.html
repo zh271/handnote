@@ -8,11 +8,17 @@
 </head>
 <body>
 <header class="bar">
-  <div class="brand">handnote<span>手写笔记渲染器</span></div>
+  <div class="bar-left">
+    <div class="brand">handnote</div>
+    <nav class="appnav" aria-label="切换页面">
+      <a href="/" class="active" aria-current="page">① 渲染笔记</a>
+      <a href="/capture">② 手写字体</a>
+    </nav>
+  </div>
   <div class="bar-actions">
-    <label class="field inline">
+    <label class="field inline font-pick">
       <span>字体</span>
-      <select id="font-select"></select>
+      <select id="font-select" title="“手写合并”开头的是你在手写字体页构建的字体"></select>
     </label>
     <label class="btn ghost" for="font-upload">导入字体</label>
     <input id="font-upload" type="file" accept=".ttf,.otf,.ttc" hidden>
@@ -98,7 +104,7 @@
       <div class="row gap">
         <button class="btn primary" id="sym-pdf">下载模板 PDF</button>
         <button class="btn ghost" id="sym-json">下载 spec.json</button>
-        <a class="btn ghost" href="/capture" target="_blank">浏览器手写</a>
+        <a class="btn ghost" href="/capture">浏览器手写</a>
       </div>
       <hr>
       <p class="note">已有扫描件？上传扫描图（按页顺序）和 spec.json，直接构建字体。写了多套时一起上传，每满一份模板的页数算一套。</p>
