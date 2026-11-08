@@ -143,3 +143,47 @@ def test_symbol_build_endpoint(server):
     assert report["glyphs"] > 0
     status, _headers, font = _request(server, report["url"])
     assert status == 200 and font[:4] in (b"\x00\x01\x00\x00", b"OTTO", b"true")
+
+
+def test_capture_page(server):
+    status, headers, body = _request(server, "/capture")
+    assert status == 200
+    assert "手写采集" in body.decode("utf-8")
+    assert b"/static/capture.js" in body
+
+
+def test_guide_font(server):
+    import io
+
+    from fontTools.ttLib import TTFont
+
+    status, headers, body = _request(server, "/api/guide-font")
+    assert status == 200
+    assert headers["Content-Type"] == "font/otf"
+    assert len(body) > 2000
+    cmap = TTFont(io.BytesIO(body)).getBestCmap()
+    for ch in "∈∪⊆⊊∨√∑∫απ0A":
+        assert ord(ch) in cmap, f"guide font misses {ch}"
+
+
+def test_capture_endpoint(server):
+    spec = json.loads(_request(server, "/api/symbols/template.json?cell_mm=12&dpi=150")[2])
+    by_char = {cell["char"]: cell["index"] for cell in spec["cells"]}
+    capture = {
+        "version": 1,
+        "width": 0.05,
+        "cells": [
+            {"index": by_char["∈"], "strokes": [[[0.1, 0.4], [0.9, 0.6]]]},
+            {"index": by_char["∪"], "strokes": [[[0.5, 0.1], [0.5, 0.9]]]},
+        ],
+    }
+    payload = json.dumps({"spec": spec, "capture": capture}).encode()
+    status, _headers, raw = _request(server, "/api/symbols/capture", data=payload,
+                                     headers={"Content-Type": "application/json"})
+    assert status == 200, raw
+    report = json.loads(raw)
+    assert report["glyphs"] == 2
+    assert report["merged_added"] == 2
+    status, _headers, font = _request(server, report["url"])
+    assert status == 200
+    assert font[:4] in (b"\x00\x01\x00\x00", b"OTTO", b"true")

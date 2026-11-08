@@ -343,8 +343,30 @@ def _cell_glyph(crop: np.ndarray, upem: int, threshold: int) -> tuple[TTGlyphPen
     return pen, advance, 60
 
 
-def build_font(
-    scans: Sequence[str | Path],
+def _crops_from_scans(scans: Sequence[str | Path], spec: Template) -> dict[int, np.ndarray]:
+    """Crop every template cell out of the scanned pages."""
+    pages = sorted(Path(p) for p in scans)
+    images: dict[int, Image.Image] = {}
+    try:
+        for idx, path in enumerate(pages):
+            images[idx] = Image.open(path).convert("L")
+        crops: dict[int, np.ndarray] = {}
+        for cell in spec.cells:
+            page = images.get(cell.page)
+            if page is None:
+                continue
+            x0, y0, x1, y1 = cell.bbox
+            if x1 > page.width or y1 > page.height:
+                continue
+            crops[cell.index] = np.asarray(page.crop((x0, y0, x1, y1)))
+        return crops
+    finally:
+        for image in images.values():
+            image.close()
+
+
+def assemble_font(
+    crops: dict[int, np.ndarray],
     template: Template | dict,
     out_path: str | Path,
     *,
@@ -352,44 +374,29 @@ def build_font(
     upem: int = 1000,
     family: str = "HandNote Symbols",
 ) -> dict:
-    """Trace scanned template pages into a TTF; returns a build report."""
+    """Trace per-cell ink crops into a TTF; returns a build report."""
     spec = template if isinstance(template, Template) else Template.from_dict(template)
-    pages = sorted(Path(p) for p in scans)
     glyphs: dict[str, object] = {}
     metrics: dict[str, tuple[int, int]] = {}
     cmap: dict[int, str] = {}
     built: list[str] = []
     missing: list[str] = []
 
-    scan_images: dict[int, Image.Image] = {}
-    for idx, path in enumerate(pages):
-        scan_images[idx] = Image.open(path).convert("L")
-
-    try:
-        for cell in spec.cells:
-            page = scan_images.get(cell.page)
-            if page is None:
-                missing.append(cell.char)
-                continue
-            x0, y0, x1, y1 = cell.bbox
-            if x1 > page.width or y1 > page.height:
-                missing.append(cell.char)
-                continue
-            crop = np.asarray(page.crop((x0, y0, x1, y1)))
-            traced = _cell_glyph(crop, upem, threshold)
-            if traced is None:
-                missing.append(cell.char)
-                continue
-            pen, advance, lsb = traced
-            name = f"uni{ord(cell.char):04X}"
-            glyphs[name] = pen.glyph()
-            metrics[name] = (advance, lsb)
-            cmap[ord(cell.char)] = name
-            built.append(cell.char)
-
-    finally:
-        for image in scan_images.values():
-            image.close()
+    for cell in spec.cells:
+        crop = crops.get(cell.index)
+        if crop is None:
+            missing.append(cell.char)
+            continue
+        traced = _cell_glyph(crop, upem, threshold)
+        if traced is None:
+            missing.append(cell.char)
+            continue
+        pen, advance, lsb = traced
+        name = f"uni{ord(cell.char):04X}"
+        glyphs[name] = pen.glyph()
+        metrics[name] = (advance, lsb)
+        cmap[ord(cell.char)] = name
+        built.append(cell.char)
 
     order = [".notdef"] + sorted(glyphs, key=lambda n: int(n[3:], 16))
     fb = FontBuilder(upem, isTTF=True)
@@ -419,6 +426,22 @@ def build_font(
         "missing": missing,
         "chars": "".join(built),
     }
+
+
+def build_font(
+    scans: Sequence[str | Path],
+    template: Template | dict,
+    out_path: str | Path,
+    *,
+    threshold: int = 128,
+    upem: int = 1000,
+    family: str = "HandNote Symbols",
+) -> dict:
+    """Trace scanned template pages into a TTF; returns a build report."""
+    spec = template if isinstance(template, Template) else Template.from_dict(template)
+    crops = _crops_from_scans(scans, spec)
+    return assemble_font(crops, spec, out_path, threshold=threshold, upem=upem,
+                         family=family)
 
 
 def simulate_scan(

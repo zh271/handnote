@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from ..capture import build_capture_font
 from ..config import RenderConfig
 from ..fonts import list_fonts, resolve_font
 from ..markdown import ParseError, parse
@@ -100,8 +101,13 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/", "/index.html"):
                 return self._send(200, (WEBUI_DIR / "index.html").read_bytes(),
                                   _MIME[".html"])
+            if path in ("/capture", "/capture.html"):
+                return self._send(200, (WEBUI_DIR / "capture.html").read_bytes(),
+                                  _MIME[".html"])
             if path.startswith("/static/"):
                 return self._static(path[len("/static/"):])
+            if path == "/api/guide-font":
+                return self._guide_font(query)
             if path == "/api/state":
                 return self._json(self._state())
             if path.startswith("/api/preview/"):
@@ -132,6 +138,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._error("not found", 404)
         return self._send(200, target.read_bytes(), "font/ttf",
                           {"Content-Disposition": f'attachment; filename="{name}"'})
+
+    def _guide_font(self, query: dict[str, list[str]]) -> None:
+        chars = query.get("chars", [""])[0] or all_symbols()
+        if len(chars) > 600:
+            return self._error("too many characters requested", 400)
+        data = guide_font(chars)
+        return self._send(200, data, "font/otf",
+                          {"Cache-Control": "public, max-age=86400"})
 
     def _state(self) -> dict[str, Any]:
         cfg = RenderConfig()
@@ -218,6 +232,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._upload(query)
             if path == "/api/symbols/build":
                 return self._symbol_build()
+            if path == "/api/symbols/capture":
+                return self._symbol_capture()
             return self._error("not found", 404)
         except (ValueError, ParseError) as exc:
             return self._error(f"{type(exc).__name__}: {exc}", 400)
@@ -325,6 +341,32 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(report)
 
 
+    def _symbol_capture(self) -> None:
+        payload = self._payload()
+        spec_data = payload.get("spec")
+        capture = payload.get("capture") or payload
+        if not spec_data:
+            return self._error("need the template spec")
+        spec = Template.from_dict(spec_data)
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        out = UPLOAD_DIR / f"capture-{uuid.uuid4().hex[:8]}.ttf"
+        report = build_capture_font(capture, spec, out)
+        merge_into = payload.get("merge")
+        if merge_into is None:
+            try:
+                merge_into = str(resolve_font(""))
+            except FileNotFoundError:
+                merge_into = ""
+        if merge_into and report["glyphs"] and Path(str(merge_into)).is_file():
+            merged = UPLOAD_DIR / f"merged-{uuid.uuid4().hex[:8]}.ttf"
+            result = merge_fonts(str(merge_into), out, merged)
+            report["font"] = str(merged)
+            report["merged_into"] = str(merge_into)
+            report["merged_added"] = result["added"]
+        report["url"] = "/api/font-file/" + Path(report["font"]).name
+        return self._json(report)
+
+
 class Part:
     def __init__(self, name: str | None, filename: str | None, data: bytes):
         self.name = name
@@ -356,6 +398,37 @@ def parse_multipart(body: bytes, content_type: str) -> list[Part]:
         parts.append(Part(meta.get_param("name", header="content-disposition"),
                           meta.get_filename(), data))
     return parts
+
+
+_GUIDE_CACHE: dict[str, bytes] = {}
+
+
+def guide_font(chars: str) -> bytes:
+    """Subset the guide font down to ``chars`` so the capture page can load it."""
+    cached = _GUIDE_CACHE.get(chars)
+    if cached:
+        return cached
+    from fontTools import subset
+
+    from ..fonts import CACHE_DIR, SOURCES
+
+    path = CACHE_DIR / SOURCES["noto"][0]
+    if not path.is_file():
+        import matplotlib
+
+        path = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans.ttf"
+    options = subset.Options()
+    options.drop_tables += ["DSIG"]
+    font = subset.load_font(str(path), options)
+    subsetter = subset.Subsetter(options)
+    subsetter.populate(unicodes={ord(ch) for ch in chars})
+    subsetter.subset(font)
+    buffer = io.BytesIO()
+    font.save(buffer)
+    font.close()
+    data = buffer.getvalue()
+    _GUIDE_CACHE[chars] = data
+    return data
 
 
 SAMPLE_MARKDOWN = """## 例题：自反闭包的求解

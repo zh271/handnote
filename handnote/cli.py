@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+from .capture import build_capture_font
 from .config import RenderConfig
 from .fonts import SOURCES, ensure_font, list_fonts, resolve_font
 from .markdown import parse
@@ -121,6 +122,24 @@ def cmd_symbols_simulate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_symbols_capture(args: argparse.Namespace) -> int:
+    spec = Template.from_dict(json.loads(Path(args.spec).read_text(encoding="utf-8")))
+    raw_text = sys.stdin.read() if args.capture == "-" else Path(args.capture).read_text(encoding="utf-8")
+    data = json.loads(raw_text)
+    if isinstance(data, dict) and "capture" in data:
+        data = data["capture"]
+    out = Path(args.out)
+    raw = out.with_name(f"{out.stem}-symbols.ttf") if args.merge else out
+    report = build_capture_font(data, spec, raw, size=args.size)
+    if args.merge and report["glyphs"]:
+        merged = merge_fonts(args.merge, raw, out)
+        report["merged_into"] = args.merge
+        report["merged_added"] = merged["added"]
+        report["font"] = str(out)
+    print(json.dumps(report, ensure_ascii=False, indent=1))
+    return 0 if report["glyphs"] else 1
+
+
 def cmd_fonts(args: argparse.Namespace) -> int:
     if args.action == "fetch":
         for key in args.names or list(SOURCES):
@@ -179,6 +198,14 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--merge", metavar="BASE_FONT",
                     help="merge the traced symbols into a base font (glyf-based)")
     sb.set_defaults(func=cmd_symbols_build)
+
+    sc = ssub.add_parser("capture", help="build a font from a browser capture JSON")
+    sc.add_argument("capture", help="capture JSON, or - for stdin")
+    sc.add_argument("-m", "--spec", required=True, help="template JSON")
+    sc.add_argument("-o", "--out", default="out/handnote-symbols.ttf")
+    sc.add_argument("--size", type=int, default=256, help="raster size per cell")
+    sc.add_argument("--merge", metavar="BASE_FONT")
+    sc.set_defaults(func=cmd_symbols_capture)
 
     ss = ssub.add_parser("simulate", help="fill a template with a font for testing")
     ss.add_argument("-m", "--spec", required=True)

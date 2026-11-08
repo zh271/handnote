@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>handnote · 浏览器手写采集</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/capture.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">手写采集<span>鼠标、触控笔或手指，逐格书写</span></div>
+  <div class="bar-actions">
+    <label class="field inline"><span>笔宽 <b id="width-out">0.050</b></span>
+      <input id="width" type="range" min="0.025" max="0.09" step="0.005" value="0.05"></label>
+    <button id="undo" class="btn ghost">撤销</button>
+    <button id="export" class="btn ghost">导出 JSON</button>
+    <button id="build" class="btn primary">构建字体</button>
+    <span id="status" class="status"></span>
+  </div>
+</header>
+
+<main class="capture">
+  <div class="cap-note">
+    <span id="progress">0 / 0</span>
+    格已写 · 数据自动存在本机浏览器 · <a href="/">回到渲染器</a>
+    <label class="check inline"><input type="checkbox" id="merge" checked> 合并到默认字体</label>
+    <button id="reset-all" class="btn ghost small">清空全部</button>
+  </div>
+  <div id="pages"></div>
+  <div id="result" class="cap-result"></div>
+</main>
+<script src="/static/capture.js"></script>
+</body>
+</html>
