@@ -6,7 +6,7 @@
 
 两条链路，共用一套几何：
 
-1. **渲染**：Markdown → 逐字抖动的手写页面 → PNG/PDF。
+1. **渲染**：Markdown → 逐字抖动的手写页面 → PNG / 矢量 PDF。
 2. **补字**：符号模板 PDF →（手写扫描 | 浏览器笔画）→ 描摹成 TTF → 合并进中文字体，补掉 mathtext 回退。
 
 纯 CPU，无模型权重，无 GPU 依赖。Python ≥ 3.11，依赖 pillow / numpy / matplotlib / fonttools / opencv-headless。
@@ -33,6 +33,7 @@ ruff check handnote tests
 | `handnote/opentype.py` | 手写多套 ↔ GSUB：`read_alternates`（读 `rand`）、`add_alternates`（追加 `rand`/`calt`） |
 | `handnote/coverage.py` | LaTeX → Unicode 映射；对比字体 cmap 报缺字 |
 | `handnote/render.py` | `Renderer`：layout（测量）→ paginate（分页）→ render_page（绘制）；`char_metrics` / `math_advance` 是 layout 与绘制共用的唯一宽度来源 |
+| `handnote/vector.py` | `VectorPage` 记录与 PDF 写出：每个轮廓一个 Form XObject，`cm` 放置，ExtGState 控透明度 |
 | `handnote/symbols.py` | 模板生成、cv2 描摹、`assemble_font`、`merge_fonts` |
 | `handnote/capture.py` | 笔画 JSON 校验、光栅化、`build_capture_font` |
 | `handnote/fonts.py` | 字体缓存目录与下载 |
@@ -51,6 +52,7 @@ ruff check handnote tests
 6. **缺字是静默的**。mathtext 缺字形会回退 STIX 而不报错，唯一可靠信号是 `coverage.analyze()`；渲染后把 `renderer.warnings` 透传给调用方。
 7. **数字格式稳定**。`spec.json` 的 `cells[].index` 与 `capture.json` 的 `index` 是同一套编号，改动需同步迁移脚本。`set` 是独立维度，同一 `index` 每套一条；扫描件优先按四角 ArUco 标记定页（id = 页号 × 4 + 角号，页号按套优先排列），无标记的按自然文件名补位；每 `spec.pages` 页为一套。
 8. **变体靠 GSUB 识别**。合并后字形名不可靠，渲染器只从 `rand` 读手写变体。`add_alternates` 只能追加，不得改动已有 lookup；改动后跑 `tests/test_sets.py::test_add_alternates_keeps_existing_features`。
+9. **矢量与光栅同源**。`render_vector` 复用 `render_page`，只切换 `_raster` / `_rec`；绘制函数里随机数的调用顺序不得因模式而变。新增绘制代码要同时记录矢量项（`("path"|"stroke"|"image", ...)`），并跑 `tests/test_vector.py`。PDF 不得写入时间戳等非确定内容。
 
 ## 测试约定
 

@@ -43,23 +43,29 @@ def cmd_render(args: argparse.Namespace) -> int:
     cfg = _config(args)
     renderer = Renderer(cfg)
     blocks = parse(source)
-    images = renderer.render(blocks)
     out = Path(args.out or "out/handnote.pdf")
     out.parent.mkdir(parents=True, exist_ok=True)
-    if out.suffix.lower() == ".pdf":
-        out.write_bytes(renderer.to_pdf(images))
-    elif len(images) == 1 and out.suffix.lower() in (".png", ".jpg", ".jpeg"):
-        images[0].convert("RGB").save(out)
+    suffix = out.suffix.lower()
+    if suffix == ".pdf" and cfg.vector_pdf:
+        # Vector pages are recorded directly; no page images are needed.
+        pages: list = renderer.render_vector(blocks)
+        out.write_bytes(renderer.to_vector_pdf(pages))
     else:
-        if out.suffix:
-            out = out.with_suffix("")
-        out.mkdir(parents=True, exist_ok=True)
-        for i, image in enumerate(images, 1):
-            image.convert("RGB").save(out / f"page-{i}.png")
+        pages = renderer.render(blocks)
+        if suffix == ".pdf":
+            out.write_bytes(renderer.to_pdf(pages))
+        elif len(pages) == 1 and suffix in (".png", ".jpg", ".jpeg"):
+            pages[0].convert("RGB").save(out)
+        else:
+            if out.suffix:
+                out = out.with_suffix("")
+            out.mkdir(parents=True, exist_ok=True)
+            for i, image in enumerate(pages, 1):
+                image.convert("RGB").save(out / f"page-{i}.png")
     report = renderer.coverage(blocks)
     summary = {
         "out": str(out),
-        "pages": len(images),
+        "pages": len(pages),
         "font": str(renderer.font_path),
         "coverage": report["coverage"],
         "missing": "".join(item["char"] for item in report["missing"]),

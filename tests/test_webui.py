@@ -90,6 +90,7 @@ def test_render_and_preview(server):
 
     status, headers, pdf = _request(server, data["pdf"])
     assert status == 200 and pdf.startswith(b"%PDF")
+    assert b"/Subtype /Form" in pdf  # vector by default
 
 
 def test_render_rejects_bad_config(server):

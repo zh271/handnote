@@ -38,6 +38,7 @@ function readConfig() {
   }
   cfg.page_numbers = $("page_numbers").checked;
   cfg.paper = $("paper").checked;
+  cfg.vector_pdf = $("vector_pdf").checked;
   cfg.font_path = $("font-select").value;
   return cfg;
 }
@@ -49,6 +50,7 @@ function applyConfig(cfg) {
   }
   $("page_numbers").checked = cfg.page_numbers !== false;
   $("paper").checked = cfg.paper !== false;
+  $("vector_pdf").checked = cfg.vector_pdf !== false;
   syncOutputs();
 }
 

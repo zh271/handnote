@@ -210,6 +210,25 @@ def handwritten_outline(font_path: str | Path, code: int, k: int, em: float
             np.array(pen.codes, dtype=MplPath.code_type))
 
 
+def glyph_outline(font: TTFont, code: int) -> tuple[np.ndarray, np.ndarray, int] | None:
+    """Matplotlib ``(verts, codes, upem)`` of ``code`` in ``font``, in font units."""
+    name = (font.getBestCmap() or {}).get(code)
+    if name is None:
+        return None
+    glyphs = font.getGlyphSet()
+    pen = _MplPen(glyphs, 1.0)
+    glyphs[name].draw(pen)
+    return (np.array(pen.verts, dtype=float).reshape(-1, 2),
+            np.array(pen.codes, dtype=MplPath.code_type),
+            int(font["head"].unitsPerEm))
+
+
+def base_outline(font_path: str | Path, code: int
+                 ) -> tuple[np.ndarray, np.ndarray, int] | None:
+    """Outline of ``code`` in the font file itself (cached per file)."""
+    return glyph_outline(_source(Path(font_path)).font, code)
+
+
 def _source(path: Path) -> _Source:
     key = f"{path}:{path.stat().st_mtime_ns}"
     src = _SOURCES.get(key)
@@ -320,6 +339,15 @@ class GlyphSets:
                     entries[code] = built
             self._data.append(_mini_font(src, entries))
         self._fonts: dict[tuple[int, int], ImageFont.FreeTypeFont] = {}
+        self._outline_fonts: dict[int, TTFont] = {}
+
+    def outline(self, ch: str, k: int) -> tuple[np.ndarray, np.ndarray, int] | None:
+        """``(verts, codes, upem)`` of ``ch`` in set ``k``, in font units."""
+        font = self._outline_fonts.get(k)
+        if font is None:
+            font = TTFont(io.BytesIO(self._data[k]))
+            self._outline_fonts[k] = font
+        return glyph_outline(font, ord(ch))
 
     def has(self, ch: str) -> bool:
         return len(ch) == 1 and ord(ch) in self.codes

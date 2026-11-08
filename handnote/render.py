@@ -38,10 +38,21 @@ from .markdown import MATRIX_RE, Block, matrix_rows, parse  # noqa: E402
 from .variants import (  # noqa: E402
     GlyphSets,
     SetPicker,
+    base_outline,
     handwritten_outline,
     handwritten_sets,
     make_warp,
     warp_points,
+)
+from .vector import (  # noqa: E402
+    IDENTITY,
+    Outline,
+    VectorPage,
+    compose,
+    rotate_about,
+    shift_items,
+    translate,
+    write_pdf,
 )
 
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
@@ -145,6 +156,13 @@ class Renderer:
         self._set_width_cache: dict[tuple[str, int], float] = {}
         self._math_ink: dict[tuple[str, int], tuple[int, int]] = {}
         self._sets: GlyphSets | None = None
+        # Vector recording: formula items per math_image key, shared outlines,
+        # and the item list of the page being drawn (None when not recording).
+        self._math_vec: dict[tuple[str, int], list[tuple]] = {}
+        self._outlines: dict[tuple, Outline] = {}
+        self._glyph_keys: dict[tuple[int, int], tuple[tuple, int] | None] = {}
+        self._rec: list[tuple] | None = None
+        self._raster = True
         self.warnings: list[str] = []
         self._apply_mathtext()
 
@@ -178,14 +196,29 @@ class Renderer:
         if key in self._math_cache:
             return self._math_cache[key]
         try:
-            result = self._render_math(tex, px)
+            img, base, items = self._render_math(tex, px)
         except Exception as exc:  # noqa: BLE001 - user LaTeX is untrusted
             self.warn(f"formula fallback: {tex[:48]!r} ({type(exc).__name__})")
-            result = self._render_math_plain(tex, px)
-        self._math_cache[key] = result
-        return result
+            img, base, items = self._render_math_plain(tex, px)
+        self._math_cache[key] = (img, base)
+        self._math_vec[key] = items
+        return img, base
 
-    def _render_math(self, tex: str, px: int) -> tuple[Image.Image, float]:
+    def _math_item(self, tex: str, px: int) -> tuple[Image.Image, float, list[tuple]]:
+        """Like :meth:`math_image`, plus the formula's vector items."""
+        img, base = self.math_image(tex, px)
+        return img, base, self._math_vec[(tex, px)]
+
+    def _place_math(self, canvas: Image.Image | None, tex: str, px: int,
+                    pos: tuple[int, int]) -> None:
+        """Composite a formula onto the page and record it when vectorising."""
+        img, _base, items = self._math_item(tex, px)
+        if canvas is not None:
+            canvas.alpha_composite(img, pos)
+        if self._rec is not None:
+            self._rec.extend(shift_items(items, *pos))
+
+    def _render_math(self, tex: str, px: int) -> tuple[Image.Image, float, list[tuple]]:
         if MATRIX_RE.search(tex):
             return self._compose_math(tex, px)
         ss = 3
@@ -193,11 +226,13 @@ class Renderer:
         body = tex.strip()
         if not (body.startswith("$") and body.endswith("$")):
             body = f"${body}$"
+        parts: list[tuple] | None = []
         try:
-            path = self._math_path(body, size, tex)
+            path = self._math_path(body, size, tex, parts)
         except (AttributeError, TypeError, IndexError, KeyError):
             # matplotlib internals moved; fall back to the plain glyph path.
             path = TextPath((0, 0), body, size=size, prop=fm.FontProperties(size=size))
+            parts = None
         bb = path.get_extents()
         if bb.width <= 0 or bb.height <= 0:
             raise ValueError("empty math bbox")
@@ -229,13 +264,31 @@ class Renderer:
         baseline = (h - (pad - bb.y0)) / ss
         tint = Image.new("RGBA", img.size, self.cfg.ink_rgb + (255,))
         tint.putalpha(img.getchannel("A"))
-        return tint, baseline
+        # Same outline in image pixels: flip y, shift by the pad, shrink by ss.
+        # The raster edge is a 1pt stroke at 100 dpi, i.e. 100/72 path units.
+        sx, sy = img.width / w, img.height / h
+        to_img = (sx, 0.0, 0.0, -sy, (pad - bb.x0) * sx, (h + bb.y0 - pad) * sy)
+        edge = 100 / 72
+        if parts is None:
+            codes = path.codes
+            if codes is None:
+                codes = np.full(len(path.vertices), MplPath.LINETO, dtype=MplPath.code_type)
+                codes[0] = MplPath.MOVETO
+            parts = [(("math", tex, px), 1.0, 0.0, 0.0)]
+            self._outlines[parts[0][0]] = Outline(np.asarray(path.vertices, dtype=float),
+                                                  np.asarray(codes), stroke=True)
+        items = [("path", key, compose(to_img, (a, 0.0, 0.0, a, e, f)), 255, edge / a)
+                 for key, a, e, f in parts]
+        return tint, baseline, items
 
-    def _math_path(self, body: str, size: float, key: str) -> MplPath:
+    def _math_path(self, body: str, size: float, key: str,
+                   parts: list[tuple] | None = None) -> MplPath:
         """Build the formula outline, swapping each glyph for one of the sets.
 
         Mirrors ``TextToPath.get_text_path`` for mathtext, but warps every
-        glyph with the set chosen for that occurrence.
+        glyph with the set chosen for that occurrence. When ``parts`` is a
+        list, it receives ``(outline_key, scale, dx, dy)`` per glyph and rule
+        so the vector PDF can reuse each glyph outline.
         """
         unit = text_to_path.FONT_SCALE
         prop = fm.FontProperties(size=unit)
@@ -271,12 +324,25 @@ class Renderer:
                 continue
             verts.append(v * (fontsize / unit) + (ox + shift(ox), oy))
             codes.append(c)
-        for ox, oy, w, h in rects:
+            if parts is not None:
+                gkey = ("mglyph", font.fname, index, ccode, k, hand > 0)
+                if gkey not in self._outlines:
+                    self._outlines[gkey] = Outline(v, c, stroke=True)
+                scale = size / unit
+                parts.append((gkey, fontsize / unit * scale, (ox + shift(ox)) * scale,
+                              oy * scale))
+        rect_codes = np.array([MplPath.MOVETO] + [MplPath.LINETO] * 4 + [MplPath.CLOSEPOLY],
+                              dtype=MplPath.code_type)
+        for n, (ox, oy, w, h) in enumerate(rects):
             ox += shift(ox)
             verts.append(np.array([(ox, oy), (ox, oy + h), (ox + w, oy + h),
                                    (ox + w, oy), (ox, oy), (0, 0)], dtype=float))
-            codes.append(np.array([MplPath.MOVETO] + [MplPath.LINETO] * 4
-                                  + [MplPath.CLOSEPOLY], dtype=MplPath.code_type))
+            codes.append(rect_codes)
+            if parts is not None:
+                rkey = ("mrect", key, size, n)
+                self._outlines[rkey] = Outline(verts[-1] * (size / unit), rect_codes,
+                                               stroke=True)
+                parts.append((rkey, 1.0, 0.0, 0.0))
         if not verts:
             return MplPath(np.empty((0, 2)))
         return MplPath(np.concatenate(verts) * (size / unit), np.concatenate(codes))
@@ -331,41 +397,45 @@ class Renderer:
         self._glyph_paths[key] = result
         return result
 
-    def _compose_math(self, tex: str, px: int) -> tuple[Image.Image, float]:
+    def _compose_math(self, tex: str, px: int) -> tuple[Image.Image, float, list[tuple]]:
         """Lay out a formula that contains matrices, left to right."""
         body = tex.strip().strip("$").strip()
-        pieces: list[tuple[Image.Image, float]] = []
+        pieces: list[tuple[Image.Image, float, list[tuple]]] = []
         pos = 0
         for m in MATRIX_RE.finditer(body):
             before = body[pos:m.start()].strip()
             if before:
-                pieces.append(self.math_image(before, px))
+                pieces.append(self._math_item(before, px))
             pieces.append(self._matrix_image(matrix_rows(m.group(2)), m.group(1), px,
                                              m.group(0)))
             pos = m.end()
         after = body[pos:].strip()
         if after:
-            pieces.append(self.math_image(after, px))
+            pieces.append(self._math_item(after, px))
         gap = max(2, round(px * 0.18))
-        ascent = max(base for _, base in pieces)
-        descent = max(img.height - base for img, base in pieces)
-        width = sum(img.width for img, _ in pieces) + gap * (len(pieces) - 1)
+        ascent = max(base for _, base, _ in pieces)
+        descent = max(img.height - base for img, base, _ in pieces)
+        width = sum(img.width for img, _, _ in pieces) + gap * (len(pieces) - 1)
         height = int(math.ceil(ascent + descent))
         out = Image.new("RGBA", (max(1, int(width)), max(1, height)), (0, 0, 0, 0))
+        items: list[tuple] = []
         x = 0
-        for img, base in pieces:
-            out.alpha_composite(img, (int(x), int(round(ascent - base))))
+        for img, base, sub in pieces:
+            pos = (int(x), int(round(ascent - base)))
+            out.alpha_composite(img, pos)
+            items += shift_items(sub, *pos)
             x += img.width + gap
-        return out, ascent
+        return out, ascent, items
 
     def _matrix_image(self, rows: list[list[str]], env: str, px: int,
-                      key: str) -> tuple[Image.Image, float]:
+                      key: str) -> tuple[Image.Image, float, list[tuple]]:
         """Draw a matrix (cells via mathtext) into its own image."""
         cfg = self.cfg
         rows = rows or [[""]]
         cell_px = max(8, round(px * 0.92))
-        imgs = [[self.math_image(cell, cell_px) if cell else None for cell in row]
+        imgs = [[self._math_item(cell, cell_px)[:2] if cell else None for cell in row]
                 for row in rows]
+        vec: list[tuple] = []
         ncols = max(len(row) for row in rows)
         col_w = []
         for c in range(ncols):
@@ -390,8 +460,9 @@ class Renderer:
                 item = row[c] if c < len(row) else None
                 if item:
                     img, base = item
-                    out.alpha_composite(img, (int(x + (col_w[c] - img.width) / 2),
-                                              int(round(baseline - base))))
+                    pos = (int(x + (col_w[c] - img.width) / 2), int(round(baseline - base)))
+                    out.alpha_composite(img, pos)
+                    vec += shift_items(self._math_vec[(rows[r][c], cell_px)], *pos)
                 x += col_w[c] + col_gap
             y = baseline + row_desc[r]
         draw = ImageDraw.Draw(out)
@@ -401,12 +472,24 @@ class Renderer:
         for s in (0, 1):
             bx = side * 0.45 if s == 0 else width - side * 0.45
             self._bracket(draw, bx, pad_y * 0.5, height - pad_y * 0.5, s, env,
-                          px * 0.8, rng, color, stroke)
-        return out, height / 2 + px * 0.3
+                          px * 0.8, rng, color, stroke, vec)
+        return out, height / 2 + px * 0.3, vec
 
-    def _bracket(self, draw: ImageDraw.ImageDraw, bx: float, ty: float, by: float,
+    @staticmethod
+    def _line(draw: ImageDraw.ImageDraw | None, pts: list[tuple[float, float]],
+              color: tuple[int, int, int, int], width: int, rec: list[tuple] | None,
+              joint: str | None = None) -> None:
+        """Draw a polyline on ``draw`` and/or record it as a vector stroke."""
+        if draw is not None:
+            draw.line(pts, fill=color, width=width, joint=joint)
+        if rec is not None:
+            rec.append(("stroke", [(float(x), float(y)) for x, y in pts], IDENTITY,
+                        color[3], float(width)))
+
+    def _bracket(self, draw: ImageDraw.ImageDraw | None, bx: float, ty: float, by: float,
                  side: int, env: str, size: float, rng: random.Random,
-                 color: tuple[int, int, int, int], width: int) -> None:
+                 color: tuple[int, int, int, int], width: int,
+                 rec: list[tuple] | None = None) -> None:
         """Draw one hand-drawn matrix delimiter (left when ``side`` is 0)."""
         if env == "matrix":
             return
@@ -417,7 +500,7 @@ class Renderer:
                 frac = k / 10
                 offset = math.sin(frac * math.pi) * tick * (1 if side else -1)
                 pts.append((bx + offset + rng.gauss(0, 0.35), ty + (by - ty) * frac))
-            draw.line(pts, fill=color, width=width, joint="curve")
+            self._line(draw, pts, color, width, rec, "curve")
             return
         tick = size * 0.34
         curvature = 0.0
@@ -425,15 +508,16 @@ class Renderer:
         for yy in np.linspace(ty, by, 11):
             curvature = 0.72 * curvature + rng.gauss(0, 0.55)
             pts.append((bx + curvature, yy))
-        draw.line(pts, fill=color, width=width, joint="curve")
+        self._line(draw, pts, color, width, rec, "curve")
         if env == "bmatrix":
             direction = 1 if side == 0 else -1
-            draw.line([(bx, ty), (bx + direction * tick, ty + rng.gauss(0, 0.7))],
-                      fill=color, width=width)
-            draw.line([(bx, by), (bx + direction * tick, by + rng.gauss(0, 0.7))],
-                      fill=color, width=width)
+            self._line(draw, [(bx, ty), (bx + direction * tick, ty + rng.gauss(0, 0.7))],
+                       color, width, rec)
+            self._line(draw, [(bx, by), (bx + direction * tick, by + rng.gauss(0, 0.7))],
+                       color, width, rec)
 
-    def _render_math_plain(self, tex: str, px: int) -> tuple[Image.Image, float]:
+    def _render_math_plain(self, tex: str, px: int
+                           ) -> tuple[Image.Image, float, list[tuple]]:
         text = tex.replace("\\", "").replace("$", "")
         font = self.font(px)
         width = max(1, int(font.getlength(text)) + 8)
@@ -442,7 +526,7 @@ class Renderer:
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         ImageDraw.Draw(img).text((4, 4 + ascent), text, font=font,
                                  fill=self.cfg.ink_rgb + (255,), anchor="ls")
-        return img, ascent + 4
+        return img, ascent + 4, [("image", img, IDENTITY)]
 
     # -- layout -----------------------------------------------------------
     def heading_size(self, kind: str) -> int:
@@ -468,7 +552,8 @@ class Renderer:
             if kind == "display":
                 tex = block.segments[0][1] if block.segments else ""
                 img, _ = self.math_image(tex, cfg.display_size)
-                lines.append({"kind": "display", "img": img, "h": img.height + 26})
+                lines.append({"kind": "display", "tex": tex, "img": img,
+                              "h": img.height + 26})
                 continue
             if kind == "matrix":
                 rows = block.payload.get("rows") or [[""]]
@@ -658,7 +743,7 @@ class Renderer:
 
     def draw_char(
         self,
-        canvas: Image.Image,
+        canvas: Image.Image | None,
         x: float,
         baseline: float,
         ch: str,
@@ -684,32 +769,60 @@ class Renderer:
         font = self.font(fs) if k is None else self._sets.font(k, fs)
         advance = font.getlength(ch)
         side = max(8, int(size * 2.5))
-        tile = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         alpha = rng.randint(cfg.ink_alpha_min, cfg.ink_alpha_max)
-        ImageDraw.Draw(tile).text(
-            (side * 0.25, side * 0.80), ch, font=font,
-            fill=cfg.ink_rgb + (alpha,), anchor="ls",
-        )
         sigma = cfg.jitter_rot if rot is None else rot
         angle = rng.gauss(0, sigma)
         if ch in "，。、；：？！）》”’":
             angle *= 0.15
-        if abs(angle) > 0.01:
-            tile = tile.rotate(
-                angle,
-                resample=_RESAMPLE,
-                center=(side * 0.25 + advance / 2, side * 0.80 - fs * 0.35),
-            )
+        center = (side * 0.25 + advance / 2, side * 0.80 - fs * 0.35)
         ox = rng.gauss(0, (cfg.jitter_dx if dx is None else dx) * size)
         oy = rng.gauss(0, (cfg.jitter_dy if dy is None else dy) * size)
-        canvas.alpha_composite(
-            tile, (int(x - side * 0.25 + ox), int(baseline - side * 0.80 + oy))
+        pos = (int(x - side * 0.25 + ox), int(baseline - side * 0.80 + oy))
+        shape = self._glyph_key(ch, k) if self._rec is not None else None
+        if self._rec is not None and shape is not None:
+            key, upem = shape
+            if len(self._outlines[key].codes):
+                s = fs / upem
+                m = (s, 0.0, 0.0, -s, side * 0.25, side * 0.80)
+                if abs(angle) > 0.01:
+                    m = compose(rotate_about(angle, *center), m)
+                self._rec.append(("path", key, compose(translate(*pos), m), alpha, 0.0))
+        if canvas is None and (self._rec is None or shape is not None):
+            return pen_advance
+        tile = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        ImageDraw.Draw(tile).text(
+            (side * 0.25, side * 0.80), ch, font=font,
+            fill=cfg.ink_rgb + (alpha,), anchor="ls",
         )
+        if abs(angle) > 0.01:
+            tile = tile.rotate(angle, resample=_RESAMPLE, center=center)
+        if canvas is not None:
+            canvas.alpha_composite(tile, pos)
+        if self._rec is not None and shape is None:
+            self._rec.append(("image", tile, translate(*pos)))
         return pen_advance
+
+    def _glyph_key(self, ch: str, k: int | None) -> tuple[tuple, int] | None:
+        """Outline key and units-per-em for ``ch`` in set ``k`` (``None``: base font)."""
+        slot = (-1 if k is None else k, ord(ch))
+        if slot not in self._glyph_keys:
+            try:
+                found = (base_outline(self.font_path, ord(ch)) if k is None
+                         else self._sets.outline(ch, k))
+            except Exception:  # noqa: BLE001 - odd fonts fall back to an image
+                found = None
+            if found is None:
+                self._glyph_keys[slot] = None
+            else:
+                verts, codes, upem = found
+                key = ("glyph", *slot)
+                self._outlines[key] = Outline(verts, codes, digits=0 if upem >= 1000 else 1)
+                self._glyph_keys[slot] = (key, upem)
+        return self._glyph_keys[slot]
 
     def draw_matrix(
         self,
-        canvas: Image.Image,
+        canvas: Image.Image | None,
         prefix: str,
         rows: list[list[str]],
         env: str,
@@ -730,22 +843,24 @@ class Renderer:
         x0 = x_center - total / 2
         group_base = top + mat_h / 2 + size * 0.30
         if pre_img is not None:
-            canvas.alpha_composite(pre_img, (int(x0), int(group_base - pre_base)))
+            self._place_math(canvas, prefix, size + 10, (int(x0), int(group_base - pre_base)))
         mx = x0 + pre_w
-        draw = ImageDraw.Draw(canvas)
+        draw = ImageDraw.Draw(canvas) if canvas is not None else None
         rng = state.rng
         color = cfg.ink_rgb + (min(255, cfg.ink_alpha_max - 20),)
         for side in (0, 1):
             bx = mx + (size * 0.30 if side == 0 else mat_w - size * 0.30)
             self._bracket(draw, bx, top - size * 0.15, top + mat_h + size * 0.1, side,
-                          env, size, rng, color, 3)
+                          env, size, rng, color, 3, self._rec)
         for r, row in enumerate(rows):
             for c, cell in enumerate(row):
                 cx = mx + size * 0.65 + c * cell_w + cell_w / 2
                 base = top + r * row_h + row_h * 0.72
                 if len(cell) > 1:
-                    img, img_base = self.math_image(cell, round(size * 0.95))
-                    canvas.alpha_composite(img, (int(cx - img.width / 2), int(base - img_base)))
+                    px = round(size * 0.95)
+                    img, img_base = self.math_image(cell, px)
+                    self._place_math(canvas, cell, px,
+                                     (int(cx - img.width / 2), int(base - img_base)))
                 elif cell:
                     advance = self.font(size).getlength(cell)
                     self.draw_char(canvas, cx - advance / 2, base, cell, size, state,
@@ -754,9 +869,9 @@ class Renderer:
 
     def render_page(
         self, lines: list[dict], page_no: int, total: int, state: _State
-    ) -> Image.Image:
+    ) -> Image.Image | None:
         cfg = self.cfg
-        canvas = self.paper(state)
+        canvas = self.paper(state) if self._raster else None
         y = float(cfg.margin_top)
         for line in lines:
             kind = line["kind"]
@@ -765,7 +880,8 @@ class Renderer:
                 continue
             if kind == "display":
                 img = line["img"]
-                canvas.alpha_composite(img, (int((cfg.page_width - img.width) / 2), int(y + 14)))
+                self._place_math(canvas, line["tex"], cfg.display_size,
+                                 (int((cfg.page_width - img.width) / 2), int(y + 14)))
                 y += line["h"]
                 continue
             if kind == "matrix":
@@ -779,10 +895,11 @@ class Renderer:
             rot_scale = 0.55 if kind == "h1" else 1.0
             for tok_kind, value in line["toks"]:
                 if tok_kind == "m":
-                    img, base = self.math_image(value, round(size * cfg.math_scale))
+                    px = round(size * cfg.math_scale)
+                    img, base = self.math_image(value, px)
                     shift, advance = self.math_advance(value, size)
-                    canvas.alpha_composite(img, (int(round(x + shift)),
-                                                 int(baseline - base)))
+                    self._place_math(canvas, value, px,
+                                     (int(round(x + shift)), int(baseline - base)))
                     x += advance
                 else:
                     for ch in value:
@@ -806,16 +923,44 @@ class Renderer:
     def render(self, blocks: list[Block]) -> list[Image.Image]:
         """Render blocks into page images (RGB, one per page)."""
         with _LOCK:
-            self._apply_mathtext()
-            self._prepare_sets(blocks)
-            lines = self.layout(blocks)
-            pages = self.paginate(lines)
-            state = _State(random.Random(self.cfg.seed),
-                           np.random.default_rng(self.cfg.seed))
-            if self._sets is not None:
-                state.picker = SetPicker(self.cfg.glyph_sets, state.rng)
+            pages, state = self._start(blocks)
             return [self.render_page(page, i + 1, len(pages), state)
                     for i, page in enumerate(pages)]
+
+    def render_vector(self, blocks: list[Block]) -> list[VectorPage]:
+        """Record blocks as vector pages, matching :meth:`render` glyph for glyph.
+
+        The same layout, set choices and jitter are drawn as outlines; only
+        the paper grain is left out (its tint and gradient are kept).
+        """
+        cfg = self.cfg
+        with _LOCK:
+            pages, state = self._start(blocks)
+            paper = ((float(cfg.paper_base), float(cfg.paper_base - cfg.paper_gradient))
+                     if cfg.paper else None)
+            out: list[VectorPage] = []
+            self._raster = False
+            try:
+                for i, page in enumerate(pages):
+                    record = VectorPage(cfg.page_width, cfg.page_height, cfg.ink_rgb, paper)
+                    self._rec = record.items
+                    self.render_page(page, i + 1, len(pages), state)
+                    out.append(record)
+            finally:
+                self._rec = None
+                self._raster = True
+            return out
+
+    def _start(self, blocks: list[Block]) -> tuple[list[list[dict]], _State]:
+        """Shared setup of a render pass: fonts, layout, pages, random state."""
+        self._apply_mathtext()
+        self._prepare_sets(blocks)
+        lines = self.layout(blocks)
+        pages = self.paginate(lines)
+        state = _State(random.Random(self.cfg.seed), np.random.default_rng(self.cfg.seed))
+        if self._sets is not None:
+            state.picker = SetPicker(self.cfg.glyph_sets, state.rng)
+        return pages, state
 
     def _prepare_sets(self, blocks: list[Block]) -> None:
         """Build per-set fonts for every character ``draw_char`` will draw.
@@ -849,6 +994,19 @@ class Renderer:
 
     def render_markdown(self, text: str) -> list[Image.Image]:
         return self.render(parse(text))
+
+    def to_vector_pdf(self, pages: list[VectorPage]) -> bytes:
+        """Encode recorded vector pages as a PDF at the configured DPI."""
+        return write_pdf(pages, self._outlines, self.cfg.dpi)
+
+    def pdf(self, blocks: list[Block], images: list[Image.Image] | None = None) -> bytes:
+        """PDF of ``blocks``: vector when ``vector_pdf`` is on, else page images.
+
+        ``images`` reuses an earlier :meth:`render` for the bitmap variant.
+        """
+        if self.cfg.vector_pdf:
+            return self.to_vector_pdf(self.render_vector(blocks))
+        return self.to_pdf(images if images is not None else self.render(blocks))
 
     def to_pdf(self, images: list[Image.Image]) -> bytes:
         """Encode page images as a PDF at the configured DPI."""

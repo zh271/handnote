@@ -184,7 +184,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error("preview expired", 404)
         if not entry.get("pdf"):
             renderer = Renderer(entry["config"])
-            entry["pdf"] = renderer.to_pdf(entry["images"])
+            entry["pdf"] = renderer.pdf(entry["blocks"], entry["images"])
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
         self.send_header("Content-Length", str(len(entry["pdf"])))
@@ -264,8 +264,9 @@ class Handler(BaseHTTPRequestHandler):
         renderer = Renderer(cfg)
         images = renderer.render(blocks)
         elapsed = time.time() - started
-        pdf = renderer.to_pdf(images) if payload.get("pdf") else None
-        key = STORE.put_preview({"images": images, "pdf": pdf, "config": cfg})
+        pdf = renderer.pdf(blocks, images) if payload.get("pdf") else None
+        key = STORE.put_preview({"images": images, "blocks": blocks, "pdf": pdf,
+                                 "config": cfg})
         report = renderer.coverage(blocks)
         return self._json({
             "id": key,

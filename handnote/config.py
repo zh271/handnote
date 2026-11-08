@@ -87,6 +87,7 @@ class RenderConfig:
     glyph_strength: float = 1.0
     seed: int = 11
     dpi: int = 150
+    vector_pdf: bool = True
 
     # -- construction -----------------------------------------------------
     @classmethod
@@ -144,7 +145,7 @@ class RenderConfig:
 def _coerce(key: str, value: Any) -> Any:
     if key in ("font_path", "ink"):
         return str(value)
-    if key == "paper" or key == "page_numbers":
+    if key in ("paper", "page_numbers", "vector_pdf"):
         if isinstance(value, str):
             return value.strip().lower() not in ("", "0", "false", "no", "off")
         return bool(value)

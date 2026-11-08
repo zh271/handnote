@@ -33,7 +33,8 @@ handnote/
   config.py       RenderConfig：全部参数、类型转换、取值钳制
   markdown.py     Markdown 子集 -> Block；$..$ / $$..$$、矩阵提取、分页符
   coverage.py     LaTeX -> Unicode 映射，对比字体 cmap 报缺字
-  render.py       Renderer：layout -> paginate -> render_page
+  render.py       Renderer：layout -> paginate -> render_page / render_vector
+  vector.py       矢量页面记录与无依赖的 PDF 写出器
   variants.py     多套字形：确定性轮廓变形、SetPicker、按套小字体
   opentype.py     GSUB 读写：rand / calt 变体
   symbols.py      模板生成、cv2 描摹、assemble_font、merge_fonts
@@ -54,13 +55,19 @@ start.bat         Windows 一键启动脚本
 ### 渲染链路
 
 ```
-Markdown ──parse──▶ Block[] ──layout──▶ 行（测量宽度、断行）──paginate──▶ 页 ──render_page──▶ PIL Image ──▶ PNG / PDF
+Markdown ──parse──▶ Block[] ──layout──▶ 行（测量宽度、断行）──paginate──▶ 页 ──render_page──┬▶ PIL Image ──▶ PNG / 位图 PDF
+                                                                                          └▶ VectorPage ──▶ 矢量 PDF
 ```
 
 - **layout** 只测量不绘制。正文按字符、行内公式按整体作为原子 token 断行。宽度只有两个来源：`Renderer.char_metrics`（单字）和 `Renderer.math_advance`（行内公式），绘制时用同样的函数，保证测量和绘制一致。
 - **公式** 由 matplotlib mathtext 解析出逐字形的位置，再用对应套的轮廓逐个重画，所以 STIX 回退的符号也会被变形。矩阵不走 mathtext，由 `_compose_math` / `_matrix_image` 拼出单元格并手绘括号。
 - **正文** 每个字单独绘制成小块，带旋转、位移、字号和墨色抖动后合成到纸张上。多套字形时，每套生成一份只含本页字符的小字体，仍由 FreeType 光栅化。
 - **随机性** 全部来自以 `seed` 初始化的 `random.Random`。同一 `seed` 输出逐字节一致，这是测试断言的一部分。
+- **矢量 PDF** 走同一个 `render_page`：`render_vector` 关掉光栅绘制（`_raster=False`），打开记录（`_rec`），`draw_char`、`_place_math`、`_bracket` 在原位置把同样的东西记成轮廓。随机数的消耗顺序和光栅完全相同，所以两种输出逐字对齐。
+  - 正文字形的轮廓取自基础字体或该套的小字体（`GlyphSets.outline`），矩阵 = 平移 · 绕 `Image.rotate` 同一中心旋转 · 字号缩放。
+  - 公式在 `_math_path` 里按字形拆成 `parts`，每个字形一个共享轮廓，另加与光栅一致的 1pt 描边。
+  - `vector.py` 把每个不同的轮廓写成一个 Form XObject，页面里只放 `cm` 矩阵和引用，墨色深浅用 ExtGState。没有轮廓可用的极少数情况（公式解析失败的纯文本回退、字体缺字）嵌入为图片。
+  - 改动绘制逻辑时，光栅和记录两边要一起改，并跑 `tests/test_vector.py`。
 
 ### 补字链路
 
@@ -169,6 +176,7 @@ python -m pytest tests/test_answer_skill.py -q
 | 能力 | 状态 | 测试 |
 |---|---|---|
 | Markdown → 手写页面（抖动、公式、矩阵、分页） | 完成 | `tests/test_render.py` |
+| 矢量 PDF（与位图逐字对齐、字节确定） | 完成 | `tests/test_vector.py` |
 | 字距、标点收紧、公式留白 | 完成 | `tests/test_spacing.py` |
 | 缺字报告 | 完成 | `tests/test_render.py::test_coverage_flags_missing_symbol` |
 | 符号模板、扫描 → TTF → 合并 | 完成 | `tests/test_symbols.py` |

@@ -4,7 +4,7 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.11%2B-3776ab.svg)](pyproject.toml)
 
-把 Markdown 笔记排成手写页面，输出 PNG 或 PDF。
+把 Markdown 笔记排成手写页面，输出 PNG 或矢量 PDF。
 
 - **像手写**：每个字随机旋转、位移、深浅不一；同一个字反复出现时字形也不完全一样。
 - **能写数学**：行内公式、居中公式、手绘括号的矩阵，和正文用同一种手写字体。
@@ -90,6 +90,12 @@ python -m handnote render notes.md -o out/a.pdf --set body_size=28 --set seed=3
 
 `examples/` 里有三份可以直接渲染的示例。
 
+PDF 默认是**矢量**的：每个字、每条公式、矩阵括号都以轮廓写入，放大到多少都不会出现锯齿，排版和抖动与 PNG 预览逐字一致，文件通常还比位图 PDF 小。纸张只保留底色和上下渐变，没有 PNG 里那层细微颗粒。想要和 PNG 完全一样的位图 PDF：
+
+```bash
+python -m handnote render notes.md -o out/notes.pdf --set vector_pdf=false
+```
+
 渲染前想知道字体缺哪些字，用 `analyze`：
 
 ```bash
@@ -108,7 +114,7 @@ python -m handnote serve            # http://127.0.0.1:8765/
 
 | 栏 | 用途 |
 |---|---|
-| 内容 | 粘贴或导入 Markdown，右侧实时预览，可下载 PDF |
+| 内容 | 粘贴或导入 Markdown，右侧实时预览，可下载 PDF（矢量或位图，见“参数”栏的“矢量 PDF”） |
 | 参数 | 字号、行距、字距、抖动、纸张等滑块；可切换字体，包括你合并出的手写字体 |
 | 符号页 | 下载打印模板、上传扫描件构建字体 |
 
@@ -225,7 +231,8 @@ python -m handnote render notes.md -o out/a.pdf --set glyph_sets=1     # 关闭�
 | `paper_noise` / `paper_gradient` | 1.6 / 3.0 | 纸张颗粒与纵向渐变 |
 | `glyph_sets` / `glyph_strength` | 4 / 1.0 | 字形套数（1 为关闭）、合成套之间的差异幅度 |
 | `seed` | 11 | 随机种子；同一种子、同一输入的输出逐字节一致 |
-| `dpi` | 150 | PDF 的物理尺寸换算 |
+| `dpi` | 150 | 页面像素与物理尺寸的换算（150 时默认页面为 A4） |
+| `vector_pdf` | true | PDF 用矢量轮廓；`false` 为页面位图 |
 
 完整字段与取值范围见 [`handnote/config.py`](handnote/config.py)。
 
@@ -305,7 +312,7 @@ mathtext 解析失败，通常是用了不支持的命令（`\le`、`\iff`、`ca
 
 ## 限制
 
-- 输出是位图（PNG，或由位图组成的 PDF），不是可编辑文字；放大后有锯齿。
+- PDF 里的字是轮廓，不是可选中、可搜索的文字；PNG 是位图。
 - 手写多套只覆盖写过的字符；汉字只有合成的多套。
 - 透视校正只处理平面变形；纸张弯曲、褶皱无法拉平。
 - 公式不支持 `cases`、`aligned`、`array` 等环境。
