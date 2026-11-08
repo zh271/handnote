@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: System libraries for opencv
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-0
+      - name: Install
+        run: pip install -e ".[test]" ruff
+      - name: Lint
+        run: ruff check handnote tests
+      - name: Fetch handwriting font
+        run: python -m handnote fonts fetch zhimang
+      - name: Test
+        run: python -m pytest -q
