@@ -178,12 +178,13 @@ def test_capture_endpoint(server):
             {"index": by_char["∪"], "strokes": [[[0.5, 0.1], [0.5, 0.9]]]},
         ],
     }
-    payload = json.dumps({"spec": spec, "capture": capture}).encode()
+    payload = json.dumps({"spec": spec, "capture": capture, "pressure": 1.5}).encode()
     status, _headers, raw = _request(server, "/api/symbols/capture", data=payload,
                                      headers={"Content-Type": "application/json"})
     assert status == 200, raw
     report = json.loads(raw)
     assert report["glyphs"] == 2
+    assert report["pressure"] == 1.5
     assert report["merged_added"] == 2
     status, _headers, font = _request(server, report["url"])
     assert status == 200
