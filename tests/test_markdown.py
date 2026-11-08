@@ -84,3 +84,35 @@ def test_code_fence_kept_verbatim():
     blocks = parse("```\n$a$ **b**\n```")
     assert blocks[0].kind == "p"
     assert blocks[0].text == "$a$ **b**"
+
+
+INLINE_MATRIX = r"\begin{bmatrix} 0 & 1 & 1 \\ 0 & 1 & 1 \end{bmatrix}"
+
+
+def test_inline_matrix_stays_inline():
+    block = parse(f"关系矩阵 ${INLINE_MATRIX}$ 如上")[0]
+    assert block.kind == "p"
+    assert block.segments[1] == ("m", INLINE_MATRIX)
+
+
+def test_lone_inline_matrix_becomes_matrix_block():
+    block = parse(f"${INLINE_MATRIX}$")[0]
+    assert block.kind == "matrix"
+    assert block.payload["rows"] == [["0", "1", "1"], ["0", "1", "1"]]
+
+
+def test_single_backslash_row_separator():
+    block = parse(r"$$\begin{bmatrix} 0 & 1 \ 1 & 0 \end{bmatrix}$$")[0]
+    assert block.payload["rows"] == [["0", "1"], ["1", "0"]]
+
+
+def test_row_spacing_option_dropped():
+    block = parse(r"$$\begin{bmatrix} a \\[2pt] b \end{bmatrix}$$")[0]
+    assert block.payload["rows"] == [["a"], ["b"]]
+
+
+def test_text_after_matrix_is_display_not_error():
+    tex = r"A = \begin{bmatrix} 1 \\ 2 \end{bmatrix}, B = \begin{pmatrix} 3 \end{pmatrix}"
+    block = parse(f"$${tex}$$")[0]
+    assert block.kind == "display"
+    assert block.segments == (("m", tex),)

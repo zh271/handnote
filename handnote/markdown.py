@@ -18,7 +18,10 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET_RE = re.compile(r"^[-*+]\s+(.*)$")
 _NUMBER_RE = re.compile(r"^(\d{1,3})[.)]\s+(.*)$")
 _RULE_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
-_MATRIX_RE = re.compile(r"\\begin\{(bmatrix|pmatrix|vmatrix)\}(.*?)\\end\{\1\}", re.S)
+MATRIX_RE = re.compile(r"\\begin\{(bmatrix|pmatrix|vmatrix|matrix)\}(.*?)\\end\{\1\}", re.S)
+_MATRIX_RE = MATRIX_RE
+_ROW_SEP_RE = re.compile(r"\\\\(?:\[[^\]]*\])?")
+_LONE_ROW_SEP_RE = re.compile(r"(?<!\\)\\(?=\s)")
 _FENCE_RE = re.compile(r"^```")
 
 
@@ -119,7 +122,13 @@ def parse(text: str) -> list[Block]:
                 break
             para.append(nxt)
             i += 1
-        blocks.append(Block("p", parse_inline(_join_lines(para))))
+        segments = parse_inline(_join_lines(para))
+        if (len(segments) == 1 and segments[0][0] == "m"
+                and _MATRIX_RE.search(segments[0][1])):
+            # A lone ``$\begin{bmatrix}..$`` line reads as display math.
+            blocks.extend(_display_blocks(segments[0][1]))
+            continue
+        blocks.append(Block("p", segments))
 
     if in_fence and fence_buf:
         blocks.append(Block("p", (("t", "\n".join(fence_buf)),)))
@@ -165,22 +174,43 @@ def _read_display_math(lines: list[str], i: int) -> tuple[str, int]:
     raise ParseError(f"unterminated $$ math block ending near line {i - len(body) + 1}")
 
 
-def _display_blocks(math: str) -> list[Block]:
-    """Turn one display-math payload into display and/or matrix blocks."""
-    m = _MATRIX_RE.search(math)
-    if not m:
-        return [Block("display", (("m", math),))]
-    prefix = math[: m.start()].strip()
-    suffix = math[m.end():].strip()
-    if suffix:
-        raise ParseError(f"unexpected text after matrix: {suffix!r}")
+def matrix_rows(body: str) -> list[list[str]]:
+    """Split a matrix body into padded rows of cell strings.
+
+    Rows break on ``\\\\`` (an optional ``[2pt]`` spacing is dropped). When the
+    body has no ``\\\\`` at all, a lone backslash followed by whitespace is
+    accepted too: Markdown tools often collapse ``\\\\`` to ``\\`` on copy.
+    """
+    body = body.replace(r"\hline", "")
+    if _ROW_SEP_RE.search(body):
+        raw_rows = _ROW_SEP_RE.split(body)
+    else:
+        raw_rows = _LONE_ROW_SEP_RE.split(body)
     rows: list[list[str]] = []
-    for row in re.split(r"\\\\", m.group(2)):
+    for row in raw_rows:
         cells = [cell.strip() for cell in row.split("&")]
         if any(cells):
             rows.append(cells)
     width = max((len(r) for r in rows), default=0)
-    rows = [r + [""] * (width - len(r)) for r in rows]
+    return [r + [""] * (width - len(r)) for r in rows]
+
+
+def _display_blocks(math: str) -> list[Block]:
+    """Turn one display-math payload into display and/or matrix blocks.
+
+    ``prefix \\begin{bmatrix}..\\end{bmatrix}`` becomes a hand-drawn matrix
+    block. Anything more involved (text after the matrix, several matrices)
+    stays a display formula; the renderer composes matrices inside it.
+    """
+    matches = list(_MATRIX_RE.finditer(math))
+    if not matches:
+        return [Block("display", (("m", math),))]
+    m = matches[0]
+    prefix = math[: m.start()].strip()
+    suffix = math[m.end():].strip().rstrip(".,;，。；").strip()
+    rows = matrix_rows(m.group(2))
+    if len(matches) > 1 or suffix or not rows:
+        return [Block("display", (("m", math),))]
     return [Block("matrix", (("m", prefix),) if prefix else (),
                   {"prefix": prefix, "rows": rows, "env": m.group(1)})]
 

@@ -1,6 +1,7 @@
 const NUMERIC = [
   "body_size", "line_height", "display_size", "math_scale", "jitter_rot",
-  "jitter_dx", "jitter_dy", "ink_alpha_min", "paper_noise", "seed",
+  "jitter_dx", "jitter_dy", "ink_alpha_min", "glyph_sets", "glyph_strength",
+  "paper_noise", "seed",
 ];
 
 const state = {
@@ -221,7 +222,8 @@ function symbolQuery() {
   const cols = $("sym-cols").value || "7";
   const rows = $("sym-rows").value || "10";
   const dpi = $("sym-dpi").value || "300";
-  return `?cell_mm=${cell}&cols=${cols}&rows=${rows}&dpi=${dpi}`;
+  const sets = $("sym-sets").value || "1";
+  return `?cell_mm=${cell}&cols=${cols}&rows=${rows}&dpi=${dpi}&sets=${sets}`;
 }
 
 function bindSymbols() {
@@ -252,6 +254,7 @@ function bindSymbols() {
     try {
       const data = await api("/api/symbols/build", { method: "POST", body: form });
       box.innerHTML = `构建完成：<b>${data.glyphs}</b> 个字形` +
+        (data.sets > 1 ? `，最多 <b>${data.sets}</b> 套` : "") +
         (data.missing.length ? `，缺 ${data.missing.length} 个（${escapeHtml(data.missing.join(" "))}）` : "") +
         ` · <a href="${data.url}" download>下载 TTF</a>`;
       const option = document.createElement("option");

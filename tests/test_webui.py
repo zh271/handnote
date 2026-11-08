@@ -187,3 +187,32 @@ def test_capture_endpoint(server):
     status, _headers, font = _request(server, report["url"])
     assert status == 200
     assert font[:4] in (b"\x00\x01\x00\x00", b"OTTO", b"true")
+
+
+def test_capture_endpoint_with_sets(server):
+    spec = json.loads(_request(server, "/api/symbols/template.json?cell_mm=12&dpi=150")[2])
+    index = next(cell["index"] for cell in spec["cells"] if cell["char"] == "∈")
+    capture = {"cells": [
+        {"index": index, "set": 0, "strokes": [[[0.1, 0.4], [0.9, 0.6]]]},
+        {"index": index, "set": 1, "strokes": [[[0.1, 0.6], [0.9, 0.4]]]},
+    ]}
+    # The capture page sends the merge checkbox as a boolean.
+    payload = json.dumps({"spec": spec, "capture": capture, "merge": True}).encode()
+    status, _headers, raw = _request(server, "/api/symbols/capture", data=payload,
+                                     headers={"Content-Type": "application/json"})
+    assert status == 200, raw
+    report = json.loads(raw)
+    assert report["sets"] == 2
+    assert report["merged_alternates"] == 1
+
+    payload = json.dumps({"spec": spec, "capture": capture, "merge": False}).encode()
+    report = json.loads(_request(server, "/api/symbols/capture", data=payload,
+                                 headers={"Content-Type": "application/json"})[2])
+    assert "merged_into" not in report
+
+
+def test_template_json_with_sets(server):
+    status, _headers, body = _request(
+        server, "/api/symbols/template.json?cell_mm=12&dpi=150&sets=2")
+    assert status == 200
+    assert json.loads(body)["sets"] == 2

@@ -41,3 +41,10 @@ def test_round_trip(font_path):
     cfg = RenderConfig.from_mapping({"font_path": str(font_path), "seed": 42})
     again = RenderConfig.from_mapping(cfg.as_dict())
     assert again.as_dict() == cfg.as_dict()
+
+
+def test_glyph_sets_clamped(font_path):
+    cfg = RenderConfig.from_mapping({"font_path": str(font_path), "glyph_sets": "12",
+                                     "glyph_strength": -1})
+    assert cfg.glyph_sets == 8
+    assert cfg.glyph_strength == 0.0

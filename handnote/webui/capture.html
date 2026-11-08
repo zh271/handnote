@@ -11,6 +11,8 @@
 <header class="bar">
   <div class="brand">手写采集<span>鼠标、触控笔或手指，逐格书写</span></div>
   <div class="bar-actions">
+    <label class="field inline"><span>当前套</span>
+      <select id="set" title="同一模板可以写多套，每套作为字形变体"></select></label>
     <label class="field inline"><span>笔宽 <b id="width-out">0.050</b></span>
       <input id="width" type="range" min="0.025" max="0.09" step="0.005" value="0.05"></label>
     <button id="undo" class="btn ghost">撤销</button>
@@ -25,7 +27,7 @@
     <span id="progress">0 / 0</span>
     格已写 · 数据自动存在本机浏览器 · <a href="/">回到渲染器</a>
     <label class="check inline"><input type="checkbox" id="merge" checked> 合并到默认字体</label>
-    <button id="reset-all" class="btn ghost small">清空全部</button>
+    <button id="reset-all" class="btn ghost small">清空本套</button>
   </div>
   <div id="pages"></div>
   <div id="result" class="cap-result"></div>

@@ -1,3 +1,4 @@
+import numpy as np
 
 from handnote.markdown import parse
 from handnote.render import Renderer, render_markdown
@@ -90,3 +91,52 @@ def test_render_markdown_helper(cfg):
     images, warnings = render_markdown("你好 $x$", cfg)
     assert len(images) == 1
     assert warnings == []
+
+
+INLINE_MATRIX = r"\begin{bmatrix} 0 & 1 & 1 \\ 0 & 1 & 1 \end{bmatrix}"
+
+
+def test_inline_matrix_renders_and_grows_line(cfg):
+    renderer = Renderer(cfg)
+    lines = renderer.layout(parse(f"关系矩阵 ${INLINE_MATRIX}$ 如上"))
+    plain = renderer.layout(parse("关系矩阵如上"))
+    assert lines[0]["h"] > plain[0]["h"]
+    renderer.render(parse(f"关系矩阵 ${INLINE_MATRIX}$ 如上"))
+    assert renderer.warnings == []
+
+
+def test_display_with_two_matrices_renders(cfg):
+    renderer = Renderer(cfg)
+    tex = r"A = \begin{bmatrix} 1 \\ 2 \end{bmatrix}, B = \begin{pmatrix} 3 & 4 \end{pmatrix}"
+    images = renderer.render(parse(f"$${tex}$$"))
+    assert len(images) == 1
+    assert renderer.warnings == []
+
+
+def test_glyph_sets_change_output_deterministically(cfg):
+    doc = "的的的的 $x+x+x+x$\n\n$$" + INLINE_MATRIX + "$$"
+    one = Renderer(cfg.replace(glyph_sets=1)).render(parse(doc))[0]
+    four_a = Renderer(cfg.replace(glyph_sets=4)).render(parse(doc))[0]
+    four_b = Renderer(cfg.replace(glyph_sets=4)).render(parse(doc))[0]
+    assert four_a.tobytes() == four_b.tobytes()
+    assert one.tobytes() != four_a.tobytes()
+
+
+def test_repeated_formula_glyphs_differ(cfg):
+    renderer = Renderer(cfg.replace(glyph_sets=4, glyph_strength=1.5))
+    verts = renderer._math_path("$xxxx$", 100, "xxxx").vertices
+    quarter = len(verts) // 4
+    shapes = [verts[i * quarter:(i + 1) * quarter] for i in range(4)]
+    shapes = [s - s.mean(axis=0) for s in shapes]
+    assert any(not np.allclose(shapes[0], s, atol=0.5) for s in shapes[1:])
+
+
+def test_single_set_formula_matches_plain_textpath(cfg):
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.textpath import TextPath
+
+    renderer = Renderer(cfg.replace(glyph_sets=1))
+    ours = renderer._math_path("$x^2+\\frac{a}{b}$", 90, "k").vertices
+    ref = TextPath((0, 0), "$x^2+\\frac{a}{b}$", size=90,
+                   prop=FontProperties(size=90)).vertices
+    assert np.allclose(ours, ref)

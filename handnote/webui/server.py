@@ -197,14 +197,15 @@ class Handler(BaseHTTPRequestHandler):
         cols = int(query.get("cols", ["7"])[0])
         rows = int(query.get("rows", ["10"])[0])
         dpi = int(query.get("dpi", ["300"])[0])
+        sets = int(query.get("sets", ["1"])[0])
         chars = query.get("chars", [""])[0] or None
         if chars and len(chars) > 600:
             return self._error("too many characters requested", 400)
-        key = f"{cell}-{cols}-{rows}-{dpi}-{chars or ''}"
+        key = f"{cell}-{cols}-{rows}-{dpi}-{sets}-{chars or ''}"
         entry = STORE.templates.get(key)
         if entry is None:
             pages, spec = build_template(chars, cell_mm=cell, cols=cols,
-                                         rows=rows, dpi=dpi)
+                                         rows=rows, dpi=dpi, sets=sets)
             buffer = io.BytesIO()
             pages[0].save(buffer, format="PDF", save_all=True,
                           append_images=pages[1:], resolution=float(dpi))
@@ -322,9 +323,11 @@ class Handler(BaseHTTPRequestHandler):
             return [int(tok) if tok.isdigit() else tok.lower()
                     for tok in re.split(r"(\d+)", name)]
 
+        batch = uuid.uuid4().hex[:8]
         for i, part in enumerate(sorted(scans, key=natural)):
             suffix = Path(part.filename or ".png").suffix
-            target = UPLOAD_DIR / f"scan-{uuid.uuid4().hex[:8]}-{i}{suffix}"
+            # One batch prefix + zero-padded page number keeps page order on disk.
+            target = UPLOAD_DIR / f"scan-{batch}-{i:03d}{suffix}"
             target.write_bytes(part.data)
             paths.append(target)
         spec = Template.from_dict(json.loads(spec_text))
@@ -338,6 +341,7 @@ class Handler(BaseHTTPRequestHandler):
             report["font"] = str(merged)
             report["merged_into"] = merge_into
             report["merged_added"] = result["added"]
+            report["merged_alternates"] = result["alternates"]
         report["url"] = "/api/font-file/" + Path(report["font"]).name
         return self._json(report)
 
@@ -353,7 +357,9 @@ class Handler(BaseHTTPRequestHandler):
         out = UPLOAD_DIR / f"capture-{uuid.uuid4().hex[:8]}.ttf"
         report = build_capture_font(capture, spec, out)
         merge_into = payload.get("merge")
-        if merge_into is None:
+        if merge_into is False:
+            merge_into = ""
+        if merge_into is None or merge_into is True:
             try:
                 merge_into = str(resolve_font(""))
             except FileNotFoundError:
@@ -364,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
             report["font"] = str(merged)
             report["merged_into"] = str(merge_into)
             report["merged_added"] = result["added"]
+            report["merged_alternates"] = result["alternates"]
         report["url"] = "/api/font-file/" + Path(report["font"]).name
         return self._json(report)
 

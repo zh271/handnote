@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,10 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 from PIL import Image, ImageDraw, ImageFont
 
 from .coverage import font_codepoints
+from .opentype import add_alternates, read_alternates
+
+#: Upper bound on handwritten sets per character.
+MAX_SETS = 8
 
 #: Symbol groups written on the template, in page order.
 SYMBOL_GROUPS: dict[str, str] = {
@@ -85,10 +90,12 @@ class Template:
     dpi: int
     pages: int
     guide_missing: list[str]
+    sets: int = 1
 
     def to_dict(self) -> dict:
         return {
             "version": 1,
+            "sets": self.sets,
             "dpi": self.dpi,
             "cell_px": self.cell_px,
             "cell_mm": round(self.cell_px / self.dpi * 25.4, 3),
@@ -129,6 +136,7 @@ class Template:
             dpi=int(data["dpi"]),
             pages=int(data["pages"]),
             guide_missing=list(data.get("guide_missing", [])),
+            sets=int(data.get("sets", 1) or 1),
         )
 
 
@@ -170,9 +178,15 @@ def build_template(
     margin_mm: float = 15.0,
     header_mm: float = 12.0,
     title: str = "手写数学符号模板",
+    sets: int = 1,
 ) -> tuple[list[Image.Image], Template]:
-    """Render the printable grid; returns ``(pages, template)``."""
+    """Render the printable grid; returns ``(pages, template)``.
+
+    With ``sets > 1`` the whole grid is repeated once per handwritten set
+    (pages are set-major); ``template.pages`` still counts one set.
+    """
     text = chars if chars is not None else all_symbols()
+    sets = int(min(max(sets, 1), MAX_SETS))
     px_per_mm = dpi / 25.4
     page_w = int(round(210 * px_per_mm))
     page_h = int(round(297 * px_per_mm))
@@ -224,14 +238,16 @@ def build_template(
     small_font_obj = load(head_font, small_size) if head_font else None
 
     pages: list[Image.Image] = []
-    for page in range(pages_total):
+    for set_no, page in ((k, pg) for k in range(sets) for pg in range(pages_total)):
         img = Image.new("RGB", (page_w, page_h), (255, 255, 255))
         draw = ImageDraw.Draw(img)
         first = page * per_page + 1
         last = min(len(text), (page + 1) * per_page)
         if head_font_obj:
-            draw.text((left, int(top * 0.42)), f"{title}   {page + 1}/{pages_total}",
-                      font=head_font_obj, fill=HEAD_RGB)
+            heading = f"{title}   {page + 1}/{pages_total}"
+            if sets > 1:
+                heading += f"   第 {set_no + 1}/{sets} 套"
+            draw.text((left, int(top * 0.42)), heading, font=head_font_obj, fill=HEAD_RGB)
             note = f"字符 {first}–{last} · 用黑色笔描写浅灰字 · 每格一字"
             draw.text((left, int(top * 0.68)), note, font=small_font_obj, fill=HEAD_RGB)
         for cell in cells:
@@ -251,7 +267,7 @@ def build_template(
         pages.append(img)
 
     template = Template(cells, (page_w, page_h), (left, top), cell_px,
-                        cols, rows, dpi, pages_total, missing)
+                        cols, rows, dpi, pages_total, missing, sets)
     return pages, template
 
 
@@ -342,12 +358,19 @@ def _cell_glyph(crop: np.ndarray, upem: int, threshold: int) -> tuple[TTGlyphPen
     return pen, advance, 60
 
 
-def _crops_from_scans(scans: Sequence[str | Path], spec: Template) -> dict[int, np.ndarray]:
-    """Crop every template cell out of the scanned pages."""
-    pages = sorted(Path(p) for p in scans)
+def natural_key(path: str | Path) -> list:
+    """Sort key that orders ``scan-2`` before ``scan-10``."""
+    name = Path(path).name.lower()
+    return [int(tok) if tok.isdigit() else tok for tok in re.split(r"(\d+)", name)]
+
+
+def _crops_from_scans(scans: Sequence[str | Path], spec: Template,
+                      first_page: int = 0) -> dict[int, np.ndarray]:
+    """Crop every template cell out of the scanned pages of one set."""
+    pages = list(scans)
     images: dict[int, Image.Image] = {}
     try:
-        for idx, path in enumerate(pages):
+        for idx, path in enumerate(pages[first_page:first_page + spec.pages]):
             images[idx] = Image.open(path).convert("L")
         crops: dict[int, np.ndarray] = {}
         for cell in spec.cells:
@@ -364,6 +387,13 @@ def _crops_from_scans(scans: Sequence[str | Path], spec: Template) -> dict[int, 
             image.close()
 
 
+def scan_sets(scans: Sequence[str | Path], spec: Template) -> list[dict[int, np.ndarray]]:
+    """Group scans into handwritten sets: every ``spec.pages`` pages is one set."""
+    pages = sorted((Path(p) for p in scans), key=natural_key)
+    count = min(MAX_SETS, max(1, math.ceil(len(pages) / max(1, spec.pages))))
+    return [_crops_from_scans(pages, spec, k * spec.pages) for k in range(count)]
+
+
 def assemble_font(
     crops: dict[int, np.ndarray],
     template: Template | dict,
@@ -372,32 +402,48 @@ def assemble_font(
     threshold: int = 128,
     upem: int = 1000,
     family: str = "HandNote Symbols",
+    extra_sets: Sequence[dict[int, np.ndarray]] = (),
 ) -> dict:
-    """Trace per-cell ink crops into a TTF; returns a build report."""
+    """Trace per-cell ink crops into a TTF; returns a build report.
+
+    ``extra_sets`` holds further handwritten sets of the same template. For
+    each character the first traced shape becomes the cmap glyph and the
+    rest become ``uniXXXX.sN`` alternates reachable through ``rand``/``calt``.
+    """
     spec = template if isinstance(template, Template) else Template.from_dict(template)
     glyphs: dict[str, object] = {}
     metrics: dict[str, tuple[int, int]] = {}
     cmap: dict[int, str] = {}
+    alternates: dict[str, list[str]] = {}
     built: list[str] = []
     missing: list[str] = []
+    all_sets = [crops, *extra_sets][:MAX_SETS]
 
     for cell in spec.cells:
-        crop = crops.get(cell.index)
-        if crop is None:
+        shapes = []
+        for set_crops in all_sets:
+            crop = set_crops.get(cell.index)
+            traced = _cell_glyph(crop, upem, threshold) if crop is not None else None
+            if traced is not None:
+                shapes.append(traced)
+        if not shapes:
             missing.append(cell.char)
             continue
-        traced = _cell_glyph(crop, upem, threshold)
-        if traced is None:
-            missing.append(cell.char)
-            continue
-        pen, advance, lsb = traced
         name = f"uni{ord(cell.char):04X}"
-        glyphs[name] = pen.glyph()
-        metrics[name] = (advance, lsb)
+        for n, (pen, advance, lsb) in enumerate(shapes):
+            glyph_name = name if n == 0 else f"{name}.s{n}"
+            glyphs[glyph_name] = pen.glyph()
+            metrics[glyph_name] = (advance, lsb)
+        if len(shapes) > 1:
+            alternates[name] = [f"{name}.s{n}" for n in range(1, len(shapes))]
         cmap[ord(cell.char)] = name
         built.append(cell.char)
 
-    order = [".notdef"] + sorted(glyphs, key=lambda n: int(n[3:], 16))
+    def order_key(glyph_name: str) -> tuple[int, int]:
+        base, _, suffix = glyph_name.partition(".s")
+        return int(suffix or 0), int(base[3:], 16)
+
+    order = [".notdef"] + sorted(glyphs, key=order_key)
     fb = FontBuilder(upem, isTTF=True)
     fb.setupGlyphOrder(order)
     fb.setupCharacterMap(cmap)
@@ -416,6 +462,7 @@ def assemble_font(
     fb.setupOS2(sTypoAscender=880, sTypoDescender=-120,
                 usWinAscent=880, usWinDescent=120)
     fb.setupPost()
+    add_alternates(fb.font, alternates)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     fb.save(str(out))
@@ -424,6 +471,8 @@ def assemble_font(
         "glyphs": len(built),
         "missing": missing,
         "chars": "".join(built),
+        "sets": max([1] + [1 + len(alts) for alts in alternates.values()]),
+        "alternates": sum(len(alts) for alts in alternates.values()),
     }
 
 
@@ -436,11 +485,17 @@ def build_font(
     upem: int = 1000,
     family: str = "HandNote Symbols",
 ) -> dict:
-    """Trace scanned template pages into a TTF; returns a build report."""
+    """Trace scanned template pages into a TTF; returns a build report.
+
+    Scans are taken in natural filename order; every ``spec.pages`` pages
+    form one handwritten set.
+    """
     spec = template if isinstance(template, Template) else Template.from_dict(template)
-    crops = _crops_from_scans(scans, spec)
-    return assemble_font(crops, spec, out_path, threshold=threshold, upem=upem,
-                         family=family)
+    sets = scan_sets(scans, spec)
+    report = assemble_font(sets[0], spec, out_path, threshold=threshold, upem=upem,
+                           family=family, extra_sets=sets[1:])
+    report["scanned_sets"] = len(sets)
+    return report
 
 
 def simulate_scan(
@@ -509,19 +564,40 @@ def merge_fonts(
     extra_cmap = extra.getBestCmap() or {}
     glyf = base["glyf"]
     hmtx = base["hmtx"]
+    vmtx = base["vmtx"] if "vmtx" in base else None
+    extra_alts = read_alternates(extra)
+    taken = set(order)
     added: list[str] = []
     skipped: list[str] = []
     mapping: dict[int, str] = {}
+    new_alts: dict[str, list[str]] = {}
+
+    def copy_glyph(src_name: str, want: str) -> str:
+        new_name = want
+        n = 1
+        while new_name in taken:
+            new_name = f"{want}_{n}"
+            n += 1
+        glyf.glyphs[new_name] = deepcopy(extra["glyf"][src_name])
+        hmtx.metrics[new_name] = extra["hmtx"][src_name]
+        if vmtx is not None:
+            head = base["head"]
+            vmtx.metrics[new_name] = (head.unitsPerEm, 0)
+        order.append(new_name)
+        taken.add(new_name)
+        return new_name
+
     for code, name in sorted(extra_cmap.items()):
         if code in base_cmap:
             skipped.append(chr(code))
             continue
-        new_name = name if name not in order else f"hn{code:04X}"
-        glyf.glyphs[new_name] = deepcopy(extra["glyf"][name])
-        hmtx.metrics[new_name] = extra["hmtx"][name]
-        order.append(new_name)
+        new_name = copy_glyph(name, name if name not in taken else f"hn{code:04X}")
         mapping[code] = new_name
         added.append(chr(code))
+        alts = extra_alts.get(name, [])
+        if alts:
+            new_alts[new_name] = [copy_glyph(alt, f"{new_name}.s{n}")
+                                  for n, alt in enumerate(alts, 1)]
     base.setGlyphOrder(order)
     base["maxp"].numGlyphs = len(order)
     for subtable in base["cmap"].tables:
@@ -530,6 +606,7 @@ def merge_fonts(
         for code, name in mapping.items():
             if code <= 0xFFFF or subtable.format in (12, 13):
                 subtable.cmap[code] = name
+    add_alternates(base, new_alts)
     if "post" in base:
         base["post"].formatType = 3.0
     base["name"].setName(
@@ -544,4 +621,5 @@ def merge_fonts(
     base.close()
     extra.close()
     return {"font": str(out), "added": len(added), "skipped": len(skipped),
-            "chars": "".join(added), "kept": "".join(skipped)}
+            "chars": "".join(added), "kept": "".join(skipped),
+            "alternates": sum(len(alts) for alts in new_alts.values())}

@@ -1,5 +1,7 @@
 const SPEC_URL = "/api/symbols/template.json?cell_mm=24&cols=7&rows=10&dpi=300";
-const STORE_KEY = "handnote:capture:v1";
+const STORE_KEY = "handnote:capture:v2";
+const LEGACY_KEY = "handnote:capture:v1";
+const MAX_SETS = 8;
 const LOGICAL = 96;
 const INK = "#1e1f2c";
 
@@ -7,7 +9,10 @@ const state = {
   spec: null,
   specKey: "",
   width: 0.05,
-  strokes: new Map(),
+  set: 0,
+  sets: new Map(), // set number -> Map(cell index -> strokes)
+  histories: new Map(), // set number -> [{ index }]
+  strokes: new Map(), // strokes of the current set
   history: [],
   drawing: null,
   dirty: false,
@@ -32,13 +37,44 @@ async function boot() {
 
   buildGrid();
   restore();
+  buildSetPicker();
 
+  $("set").addEventListener("change", () => switchSet(Number($("set").value)));
   $("undo").addEventListener("click", undo);
   $("reset-all").addEventListener("click", resetAll);
   $("export").addEventListener("click", exportJson);
   $("build").addEventListener("click", buildFont);
   updateProgress();
   setStatus("就绪");
+}
+
+function setMap(k) {
+  if (!state.sets.has(k)) state.sets.set(k, new Map());
+  if (!state.histories.has(k)) state.histories.set(k, []);
+  return state.sets.get(k);
+}
+
+function buildSetPicker() {
+  const select = $("set");
+  select.innerHTML = "";
+  for (let k = 0; k < MAX_SETS; k += 1) {
+    const option = document.createElement("option");
+    const count = (state.sets.get(k) || new Map()).size;
+    option.value = String(k);
+    option.textContent = `第 ${k + 1} 套` + (count ? ` · ${count}` : "");
+    select.appendChild(option);
+  }
+  select.value = String(state.set);
+}
+
+function switchSet(k) {
+  state.set = k;
+  state.strokes = setMap(k);
+  state.history = state.histories.get(k);
+  document.querySelectorAll(".cell").forEach((el) => redraw(Number(el.dataset.index)));
+  buildSetPicker();
+  updateProgress();
+  save();
 }
 
 function buildGrid() {
@@ -185,26 +221,42 @@ function undo() {
 
 function resetAll() {
   if (!state.strokes.size) return;
-  if (!window.confirm("清空全部已写内容？")) return;
+  if (!window.confirm(`清空第 ${state.set + 1} 套已写内容？`)) return;
   const indexes = [...state.strokes.keys()];
   state.strokes.clear();
-  state.history = [];
+  state.history.length = 0;
   indexes.forEach(redraw);
-  localStorage.removeItem(STORE_KEY);
+  save();
+  buildSetPicker();
   updateProgress();
 }
 
+function filledSets() {
+  return [...state.sets.entries()].filter(([, cells]) => cells.size > 0);
+}
+
 function updateProgress() {
-  $("progress").textContent = `${state.strokes.size} / ${state.spec.cells.length}`;
-  $("build").disabled = state.strokes.size === 0;
+  const used = filledSets().length;
+  $("progress").textContent =
+    `第 ${state.set + 1} 套 ${state.strokes.size} / ${state.spec.cells.length}` +
+    (used > 1 ? ` · 共 ${used} 套` : "");
+  $("build").disabled = used === 0;
+  const option = $("set").options[state.set];
+  if (option) {
+    option.textContent = `第 ${state.set + 1} 套` +
+      (state.strokes.size ? ` · ${state.strokes.size}` : "");
+  }
 }
 
 function payload() {
   const cells = [];
-  for (const [index, strokes] of state.strokes) {
-    cells.push({ index, strokes: strokes.map((s) => s.points) });
+  for (const [set, map] of state.sets) {
+    for (const [index, strokes] of map) {
+      if (!strokes.length) continue;
+      cells.push({ index, set, strokes: strokes.map((s) => s.points) });
+    }
   }
-  cells.sort((a, b) => a.index - b.index);
+  cells.sort((a, b) => a.set - b.set || a.index - b.index);
   return { version: 1, source: "browser", width: state.width, cells };
 }
 
@@ -214,7 +266,7 @@ function save() {
   saveTimer = setTimeout(() => {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        specKey: state.specKey, width: state.width, capture: payload(),
+        specKey: state.specKey, width: state.width, set: state.set, capture: payload(),
       }));
     } catch (err) {
       setStatus("草稿保存失败");
@@ -222,13 +274,19 @@ function save() {
   }, 300);
 }
 
-function restore() {
-  let draft = null;
+function readDraft(key) {
   try {
-    draft = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+    return JSON.parse(localStorage.getItem(key) || "null");
   } catch (err) {
-    draft = null;
+    return null;
   }
+}
+
+function restore() {
+  // v1 drafts had a single set; they load as set 1.
+  const draft = readDraft(STORE_KEY) || readDraft(LEGACY_KEY);
+  state.strokes = setMap(0);
+  state.history = state.histories.get(0);
   if (!draft || draft.specKey !== state.specKey) return;
   if (draft.width) {
     state.width = draft.width;
@@ -237,9 +295,15 @@ function restore() {
   }
   for (const cell of draft.capture.cells || []) {
     if (!cell.strokes || !cell.strokes.length) continue;
-    state.strokes.set(cell.index, cell.strokes.map((points) => ({ points })));
-    redraw(cell.index);
+    const k = Number.isInteger(cell.set) ? cell.set : 0;
+    if (k < 0 || k >= MAX_SETS) continue;
+    setMap(k).set(cell.index, cell.strokes.map((points) => ({ points })));
   }
+  const k = Number.isInteger(draft.set) && draft.set < MAX_SETS ? draft.set : 0;
+  state.set = k;
+  state.strokes = setMap(k);
+  state.history = state.histories.get(k);
+  document.querySelectorAll(".cell").forEach((el) => redraw(Number(el.dataset.index)));
   setStatus("已恢复草稿");
 }
 
@@ -254,7 +318,7 @@ function exportJson() {
 }
 
 async function buildFont() {
-  if (!state.strokes.size) return;
+  if (!filledSets().length) return;
   setStatus("构建中…");
   $("result").textContent = "";
   try {
@@ -272,6 +336,7 @@ async function buildFont() {
     const missing = data.missing || [];
     $("result").innerHTML =
       `构建完成：<b>${data.glyphs}</b> 个字形` +
+      (data.sets > 1 ? `，最多 <b>${data.sets}</b> 套（变体 ${data.alternates} 个）` : "") +
       (data.merged_added !== undefined ? `，合并新增 <b>${data.merged_added}</b> 个码位` : "") +
       ` · <a href="${data.url}" download>下载 TTF</a>` +
       (missing.length

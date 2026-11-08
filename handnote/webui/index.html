@@ -61,6 +61,10 @@
           <input type="range" id="jitter_dy" min="0" max="0.12" step="0.005"></label>
         <label class="field"><span>墨色最浅 <b data-out="ink_alpha_min"></b></span>
           <input type="range" id="ink_alpha_min" min="150" max="255" step="1"></label>
+        <label class="field"><span>字形套数 <b data-out="glyph_sets"></b></span>
+          <input type="range" id="glyph_sets" min="1" max="8" step="1"></label>
+        <label class="field"><span>字形差异 <b data-out="glyph_strength"></b></span>
+          <input type="range" id="glyph_strength" min="0" max="2.5" step="0.05"></label>
         <label class="field"><span>纸张噪声 <b data-out="paper_noise"></b></span>
           <input type="range" id="paper_noise" min="0" max="10" step="0.1"></label>
         <label class="field"><span>随机种子</span>
@@ -79,6 +83,7 @@
           <div class="row"><input type="number" id="sym-cols" value="7" min="2" max="12">
           <input type="number" id="sym-rows" value="10" min="2" max="14"></div></label>
         <label class="field"><span>DPI</span><input type="number" id="sym-dpi" value="300" min="150" max="600" step="50"></label>
+        <label class="field"><span>套数（每套是一份字形变体）</span><input type="number" id="sym-sets" value="1" min="1" max="8" step="1"></label>
       </div>
       <div class="row gap">
         <button class="btn primary" id="sym-pdf">下载模板 PDF</button>
@@ -86,7 +91,7 @@
         <a class="btn ghost" href="/capture" target="_blank">浏览器手写</a>
       </div>
       <hr>
-      <p class="note">已有扫描件？上传扫描图（按页顺序）和 spec.json，直接构建字体。</p>
+      <p class="note">已有扫描件？上传扫描图（按页顺序）和 spec.json，直接构建字体。写了多套时一起上传，每满一份模板的页数算一套。</p>
       <label class="field"><span>扫描图</span><input type="file" id="sym-scans" accept="image/*" multiple></label>
       <label class="field"><span>spec.json</span><input type="file" id="sym-spec" accept=".json"></label>
       <label class="check"><input type="checkbox" id="sym-merge" checked> 合并到当前字体（保留中文）</label>

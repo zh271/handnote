@@ -25,14 +25,23 @@ import numpy as np  # noqa: E402
 from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.patches import PathPatch  # noqa: E402
-from matplotlib.textpath import TextPath  # noqa: E402
+from matplotlib.path import Path as MplPath  # noqa: E402
+from matplotlib.textpath import TextPath, text_to_path  # noqa: E402
 from matplotlib.transforms import Affine2D  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 from .config import RenderConfig  # noqa: E402
 from .coverage import analyze  # noqa: E402
 from .fonts import resolve_font  # noqa: E402
-from .markdown import Block, parse  # noqa: E402
+from .markdown import MATRIX_RE, Block, matrix_rows, parse  # noqa: E402
+from .variants import (  # noqa: E402
+    GlyphSets,
+    SetPicker,
+    handwritten_outline,
+    handwritten_sets,
+    make_warp,
+    warp_points,
+)
 
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
@@ -44,6 +53,8 @@ _REGISTERED: dict[str, str] = {}
 _NO_LINE_START = set("，。、；：？！）》”’】」』%")
 
 _ATOMIC_ASCII = set("._-/'()")
+
+_CLOSEPOLY = MplPath.CLOSEPOLY
 
 
 def _register(path: Path) -> str:
@@ -84,6 +95,7 @@ def _tokenize(segments: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
 class _State:
     rng: random.Random
     np_rng: np.random.Generator
+    picker: SetPicker | None = None
 
 
 class Renderer:
@@ -96,6 +108,9 @@ class Renderer:
         self.family = _register(self.font_path)
         self._pil_fonts: dict[int, ImageFont.FreeTypeFont] = {}
         self._math_cache: dict[tuple[str, int], tuple[Image.Image, float]] = {}
+        self._glyph_paths: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
+        self._own_fonts: dict[str, bool] = {}
+        self._sets: GlyphSets | None = None
         self.warnings: list[str] = []
         self._apply_mathtext()
 
@@ -137,12 +152,18 @@ class Renderer:
         return result
 
     def _render_math(self, tex: str, px: int) -> tuple[Image.Image, float]:
+        if MATRIX_RE.search(tex):
+            return self._compose_math(tex, px)
         ss = 3
         size = max(1, px) * ss
         body = tex.strip()
         if not (body.startswith("$") and body.endswith("$")):
             body = f"${body}$"
-        path = TextPath((0, 0), body, size=size, prop=fm.FontProperties(size=size))
+        try:
+            path = self._math_path(body, size, tex)
+        except (AttributeError, TypeError, IndexError, KeyError):
+            # matplotlib internals moved; fall back to the plain glyph path.
+            path = TextPath((0, 0), body, size=size, prop=fm.FontProperties(size=size))
         bb = path.get_extents()
         if bb.width <= 0 or bb.height <= 0:
             raise ValueError("empty math bbox")
@@ -175,6 +196,195 @@ class Renderer:
         tint = Image.new("RGBA", img.size, self.cfg.ink_rgb + (255,))
         tint.putalpha(img.getchannel("A"))
         return tint, baseline
+
+    def _math_path(self, body: str, size: float, key: str) -> MplPath:
+        """Build the formula outline, swapping each glyph for one of the sets.
+
+        Mirrors ``TextToPath.get_text_path`` for mathtext, but warps every
+        glyph with the set chosen for that occurrence.
+        """
+        unit = text_to_path.FONT_SCALE
+        prop = fm.FontProperties(size=unit)
+        parsed = text_to_path.mathtext_parser.parse(body, text_to_path.DPI, prop)
+        glyphs, rects = parsed[3], parsed[4]
+        cfg = self.cfg
+        picker = SetPicker(cfg.glyph_sets, random.Random(f"{cfg.seed}|math|{key}"))
+        verts: list[np.ndarray] = []
+        codes: list[np.ndarray] = []
+        for glyph in glyphs:
+            if len(glyph) == 6:
+                font, fontsize, ccode, index, ox, oy = glyph
+            else:
+                font, fontsize, ccode, ox, oy = glyph
+                index = font.get_char_index(ccode)
+            hand = (handwritten_sets(self.font_path, ccode)
+                    if cfg.glyph_sets > 1 and self._is_own_font(font.fname) else 0)
+            k = picker.pick(ccode, hand or None)
+            v, c = self._math_glyph(font, index, ccode, k, hand > 0)
+            if len(v) == 0:
+                continue
+            verts.append(v * (fontsize / unit) + (ox, oy))
+            codes.append(c)
+        for ox, oy, w, h in rects:
+            verts.append(np.array([(ox, oy), (ox, oy + h), (ox + w, oy + h),
+                                   (ox + w, oy), (ox, oy), (0, 0)], dtype=float))
+            codes.append(np.array([MplPath.MOVETO] + [MplPath.LINETO] * 4
+                                  + [MplPath.CLOSEPOLY], dtype=MplPath.code_type))
+        if not verts:
+            return MplPath(np.empty((0, 2)))
+        return MplPath(np.concatenate(verts) * (size / unit), np.concatenate(codes))
+
+    def _is_own_font(self, fname: str) -> bool:
+        hit = self._own_fonts.get(fname)
+        if hit is None:
+            try:
+                hit = Path(fname).resolve() == self.font_path.resolve()
+            except OSError:
+                hit = False
+            self._own_fonts[fname] = hit
+        return hit
+
+    def _math_glyph(self, font, index: int, ccode: int, k: int,
+                    handwritten: bool = False) -> tuple[np.ndarray, np.ndarray]:
+        """Outline of one mathtext glyph at ``FONT_SCALE`` for set ``k``.
+
+        Handwritten sets come from the font's alternates; other sets warp
+        the base outline.
+        """
+        cfg = self.cfg
+        key = (font.fname, index, ccode, k, handwritten, cfg.seed, cfg.glyph_strength)
+        hit = self._glyph_paths.get(key)
+        if hit is not None:
+            return hit
+        outline = (handwritten_outline(self.font_path, ccode, k, text_to_path.FONT_SCALE)
+                   if handwritten and k > 0 else None)
+        if outline is not None:
+            result = outline
+        elif k == 0 or handwritten:
+            from matplotlib import ft2font
+
+            flags = getattr(getattr(ft2font, "LoadFlags", None), "NO_HINTING", None)
+            if flags is None:
+                flags = ft2font.LOAD_NO_HINTING
+            font.clear()
+            font.set_size(text_to_path.FONT_SCALE, text_to_path.DPI)
+            font.load_glyph(index, flags=flags)
+            verts, codes = font.get_path()
+            result = (np.asarray(verts, dtype=float), np.asarray(codes))
+        else:
+            verts, codes = self._math_glyph(font, index, ccode, 0)
+            keep = codes != _CLOSEPOLY
+            warped = verts.copy()
+            if keep.any():
+                warped[keep] = warp_points(
+                    verts[keep], make_warp(ccode, k, cfg.seed, cfg.glyph_strength),
+                    float(text_to_path.FONT_SCALE),
+                )
+            result = (warped, codes)
+        self._glyph_paths[key] = result
+        return result
+
+    def _compose_math(self, tex: str, px: int) -> tuple[Image.Image, float]:
+        """Lay out a formula that contains matrices, left to right."""
+        body = tex.strip().strip("$").strip()
+        pieces: list[tuple[Image.Image, float]] = []
+        pos = 0
+        for m in MATRIX_RE.finditer(body):
+            before = body[pos:m.start()].strip()
+            if before:
+                pieces.append(self.math_image(before, px))
+            pieces.append(self._matrix_image(matrix_rows(m.group(2)), m.group(1), px,
+                                             m.group(0)))
+            pos = m.end()
+        after = body[pos:].strip()
+        if after:
+            pieces.append(self.math_image(after, px))
+        gap = max(2, round(px * 0.18))
+        ascent = max(base for _, base in pieces)
+        descent = max(img.height - base for img, base in pieces)
+        width = sum(img.width for img, _ in pieces) + gap * (len(pieces) - 1)
+        height = int(math.ceil(ascent + descent))
+        out = Image.new("RGBA", (max(1, int(width)), max(1, height)), (0, 0, 0, 0))
+        x = 0
+        for img, base in pieces:
+            out.alpha_composite(img, (int(x), int(round(ascent - base))))
+            x += img.width + gap
+        return out, ascent
+
+    def _matrix_image(self, rows: list[list[str]], env: str, px: int,
+                      key: str) -> tuple[Image.Image, float]:
+        """Draw a matrix (cells via mathtext) into its own image."""
+        cfg = self.cfg
+        rows = rows or [[""]]
+        cell_px = max(8, round(px * 0.92))
+        imgs = [[self.math_image(cell, cell_px) if cell else None for cell in row]
+                for row in rows]
+        ncols = max(len(row) for row in rows)
+        col_w = []
+        for c in range(ncols):
+            widths = [row[c][0].width for row in imgs if c < len(row) and row[c]]
+            col_w.append(max(widths, default=int(cell_px * 0.6)))
+        row_asc, row_desc = [], []
+        for row in imgs:
+            items = [it for it in row if it]
+            row_asc.append(max([b for _, b in items] + [cell_px * 0.95]))
+            row_desc.append(max([im.height - b for im, b in items] + [cell_px * 0.3]))
+        side = px * 0.42
+        col_gap = px * 0.5
+        pad_y = px * 0.12
+        width = int(math.ceil(2 * side + sum(col_w) + col_gap * (ncols - 1)))
+        height = int(math.ceil(sum(row_asc) + sum(row_desc) + 2 * pad_y))
+        out = Image.new("RGBA", (max(1, width), max(1, height)), (0, 0, 0, 0))
+        y = pad_y
+        for r, row in enumerate(imgs):
+            baseline = y + row_asc[r]
+            x = side
+            for c in range(ncols):
+                item = row[c] if c < len(row) else None
+                if item:
+                    img, base = item
+                    out.alpha_composite(img, (int(x + (col_w[c] - img.width) / 2),
+                                              int(round(baseline - base))))
+                x += col_w[c] + col_gap
+            y = baseline + row_desc[r]
+        draw = ImageDraw.Draw(out)
+        rng = random.Random(f"{cfg.seed}|matrix|{key}|{px}")
+        color = cfg.ink_rgb + (min(255, cfg.ink_alpha_max - 20),)
+        stroke = max(1, round(px / 13))
+        for s in (0, 1):
+            bx = side * 0.45 if s == 0 else width - side * 0.45
+            self._bracket(draw, bx, pad_y * 0.5, height - pad_y * 0.5, s, env,
+                          px * 0.8, rng, color, stroke)
+        return out, height / 2 + px * 0.3
+
+    def _bracket(self, draw: ImageDraw.ImageDraw, bx: float, ty: float, by: float,
+                 side: int, env: str, size: float, rng: random.Random,
+                 color: tuple[int, int, int, int], width: int) -> None:
+        """Draw one hand-drawn matrix delimiter (left when ``side`` is 0)."""
+        if env == "matrix":
+            return
+        if env == "pmatrix":
+            tick = size * 0.30
+            pts = []
+            for k in range(11):
+                frac = k / 10
+                offset = math.sin(frac * math.pi) * tick * (1 if side else -1)
+                pts.append((bx + offset + rng.gauss(0, 0.35), ty + (by - ty) * frac))
+            draw.line(pts, fill=color, width=width, joint="curve")
+            return
+        tick = size * 0.34
+        curvature = 0.0
+        pts: list[tuple[float, float]] = []
+        for yy in np.linspace(ty, by, 11):
+            curvature = 0.72 * curvature + rng.gauss(0, 0.55)
+            pts.append((bx + curvature, yy))
+        draw.line(pts, fill=color, width=width, joint="curve")
+        if env == "bmatrix":
+            direction = 1 if side == 0 else -1
+            draw.line([(bx, ty), (bx + direction * tick, ty + rng.gauss(0, 0.7))],
+                      fill=color, width=width)
+            draw.line([(bx, by), (bx + direction * tick, by + rng.gauss(0, 0.7))],
+                      fill=color, width=width)
 
     def _render_math_plain(self, tex: str, px: int) -> tuple[Image.Image, float]:
         text = tex.replace("\\", "").replace("$", "")
@@ -242,18 +452,33 @@ class Renderer:
                         cur.append(tok)
                         x += w
                         continue
-                    lines.append({"kind": kind, "size": size, "indent": indent,
-                                  "toks": cur, "h": round(size * cfg.line_height)})
+                    lines.append(self._text_line(kind, size, indent, cur))
                     cur = []
                     x = 0.0
                 cur.append(tok)
                 x += w
             if cur:
-                lines.append({"kind": kind, "size": size, "indent": indent,
-                              "toks": cur, "h": round(size * cfg.line_height)})
+                lines.append(self._text_line(kind, size, indent, cur))
             if kind in ("h1", "h2"):
                 lines.append({"kind": "gap", "h": 6})
         return lines
+
+    def _text_line(self, kind: str, size: int, indent: int,
+                   toks: list[tuple[str, str]]) -> dict:
+        """One text line; grows when an inline formula (e.g. a matrix) is tall."""
+        cfg = self.cfg
+        h = round(size * cfg.line_height)
+        top = size * 1.28
+        pad_top = pad_bottom = 0.0
+        for tok_kind, value in toks:
+            if tok_kind != "m":
+                continue
+            img, base = self.math_image(value, round(size * cfg.math_scale))
+            pad_top = max(pad_top, base + 2 - top)
+            pad_bottom = max(pad_bottom, img.height - base + 2 - (h - top))
+        pad = math.ceil(pad_top)
+        return {"kind": kind, "size": size, "indent": indent, "toks": toks,
+                "pad": pad, "h": h + pad + math.ceil(pad_bottom)}
 
     def paginate(self, lines: list[dict]) -> list[list[dict]]:
         """Split lines into pages, honouring page breaks and keep-with-next."""
@@ -325,6 +550,9 @@ class Renderer:
         fs = max(1, fs)
         font = self.font(fs)
         advance = font.getlength(ch)
+        if self._sets is not None and state.picker is not None and self._sets.has(ch):
+            k = state.picker.pick(ord(ch), self._sets.choices(ch))
+            font = self._sets.font(k, fs)
         side = max(8, int(size * 2.5))
         tile = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         alpha = rng.randint(cfg.ink_alpha_min, cfg.ink_alpha_max)
@@ -376,33 +604,11 @@ class Renderer:
         mx = x0 + pre_w
         draw = ImageDraw.Draw(canvas)
         rng = state.rng
+        color = cfg.ink_rgb + (min(255, cfg.ink_alpha_max - 20),)
         for side in (0, 1):
             bx = mx + (size * 0.30 if side == 0 else mat_w - size * 0.30)
-            ty = top - size * 0.15
-            by = top + mat_h + size * 0.1
-            color = cfg.ink_rgb + (min(255, cfg.ink_alpha_max - 20),)
-            tick = size * 0.30
-            if env == "pmatrix":
-                pts = []
-                for k in range(11):
-                    frac = k / 10
-                    offset = math.sin(frac * math.pi) * tick * (1 if side else -1)
-                    pts.append((bx + offset + rng.gauss(0, 0.35), ty + (by - ty) * frac))
-                draw.line(pts, fill=color, width=3, joint="curve")
-                continue
-            tick = size * 0.34
-            curvature = 0.0
-            pts: list[tuple[float, float]] = []
-            for yy in np.linspace(ty, by, 11):
-                curvature = 0.72 * curvature + rng.gauss(0, 0.55)
-                pts.append((bx + curvature, yy))
-            draw.line(pts, fill=color, width=3, joint="curve")
-            if env == "bmatrix":
-                direction = 1 if side == 0 else -1
-                draw.line([(bx, ty), (bx + direction * tick, ty + rng.gauss(0, 0.7))],
-                          fill=color, width=3)
-                draw.line([(bx, by), (bx + direction * tick, by + rng.gauss(0, 0.7))],
-                          fill=color, width=3)
+            self._bracket(draw, bx, top - size * 0.15, top + mat_h + size * 0.1, side,
+                          env, size, rng, color, 3)
         for r, row in enumerate(rows):
             for c, cell in enumerate(row):
                 cx = mx + size * 0.65 + c * cell_w + cell_w / 2
@@ -439,7 +645,7 @@ class Renderer:
                 continue
             size = line["size"]
             x = float(cfg.margin_x + line["indent"])
-            baseline = y + size * 1.28
+            baseline = y + line.get("pad", 0) + size * 1.28
             rot_scale = 0.55 if kind == "h1" else 1.0
             for tok_kind, value in line["toks"]:
                 if tok_kind == "m":
@@ -473,8 +679,37 @@ class Renderer:
             pages = self.paginate(lines)
             state = _State(random.Random(self.cfg.seed),
                            np.random.default_rng(self.cfg.seed))
+            self._prepare_sets(lines, len(pages))
+            if self._sets is not None:
+                state.picker = SetPicker(self.cfg.glyph_sets, state.rng)
             return [self.render_page(page, i + 1, len(pages), state)
                     for i, page in enumerate(pages)]
+
+    def _prepare_sets(self, lines: list[dict], pages: int) -> None:
+        """Build per-set fonts for every character ``draw_char`` will draw."""
+        cfg = self.cfg
+        if cfg.glyph_sets <= 1:
+            self._sets = None
+            return
+        chars: set[str] = set()
+        for line in lines:
+            for kind, value in line.get("toks", ()):
+                if kind == "t":
+                    chars.update(value)
+            for row in line.get("rows", ()):
+                chars.update(cell for cell in row if len(cell) == 1)
+        if cfg.page_numbers:
+            chars.update("0123456789")
+        chars = {ch for ch in chars if not ch.isspace()}
+        current = self._sets
+        if current is not None and {ord(ch) for ch in chars} <= current.codes | current.absent:
+            return
+        try:
+            self._sets = GlyphSets(self.font_path, chars, cfg.glyph_sets,
+                                   cfg.glyph_strength, cfg.seed)
+        except Exception as exc:  # noqa: BLE001 - odd fonts fall back to one set
+            self._sets = None
+            self.warn(f"glyph sets disabled: {type(exc).__name__}: {exc}")
 
     def render_markdown(self, text: str) -> list[Image.Image]:
         return self.render(parse(text))

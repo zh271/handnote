@@ -48,11 +48,13 @@ CLAUDE.md       给接手开发的 agent 的工程约定
 | `- 条目` / `1. 条目` | 项目符号 / 编号 |
 | `$x^2$` | 行内公式，与正文同一字体 |
 | `$$...$$` | 居中公式 |
-| `$$M=\begin{bmatrix}...\end{bmatrix}$$` | 手绘括号矩阵（`pmatrix` 为圆括号） |
+| `$$M=\begin{bmatrix}...\end{bmatrix}$$` | 手绘括号矩阵（`pmatrix` 为圆括号，`vmatrix` 竖线，`matrix` 无括号） |
+| 单独一行的 `$\begin{bmatrix}...\end{bmatrix}$` | 同上，按独立矩阵居中 |
+| 正文里的 `$...\begin{bmatrix}...\end{bmatrix}...$` | 行内小矩阵，所在行自动加高 |
 | `---` | 强制分页 |
 | ` ``` ` 代码块 | 原样输出文字 |
 
-矩阵单元格超过一个字符时自动按公式渲染。
+矩阵单元格超过一个字符时自动按公式渲染。矩阵后面还有内容（如 `A=\begin{bmatrix}..\end{bmatrix}, B=...`）或一条公式里有多个矩阵时，整条按公式排版，矩阵在公式内手绘。行分隔写 `\\`；如果复制时被吞成单个 `\`，也能识别。
 
 ## 数学符号页
 
@@ -81,13 +83,14 @@ python -m handnote symbols build scan-*.png -m out/math-symbols.json \
 
 ```json
 {"version": 1, "source": "browser", "width": 0.05,
- "cells": [{"index": 12, "strokes": [[[0.31, 0.18, 0.62], [0.33, 0.25, 0.58]]]}]}
+ "cells": [{"index": 12, "set": 0, "strokes": [[[0.31, 0.18, 0.62], [0.33, 0.25, 0.58]]]}]}
 ```
 
 | 字段 | 含义 |
 |---|---|
 | `width` | 笔宽，占格子边长的比例，范围 0.01–0.2 |
 | `cells[].index` | 模板格子序号，与 spec.json 一致 |
+| `cells[].set` | 第几套，0–7，可省略（默认 0）；同一格每套一条 |
 | `strokes` | 一笔一个数组，点按书写顺序排列 |
 | 点 | `[u, v]` 或 `[u, v, pressure]`；u/v 归一化到单格，原点在左上角，y 向下 |
 
@@ -99,6 +102,47 @@ python -m handnote symbols capture capture.json -m out/math-symbols.json \
 ```
 
 网页上的“构建字体”按钮等价于这条命令，默认合并到默认字体。
+
+## 多套字形
+
+同一个字反复出现时，手写不会每次一模一样。每次画字随机取一套，同一个字不会连续两次用同一套。字形有两个来源：
+
+1. **手写多套**（优先）：同一张模板写几遍，每遍是一套。字体里带了手写变体的字符，就在这几套之间轮换，不做任何变形。
+2. **合成多套**：其余字符默认 4 套，第 0 套是字体原字形，其余几套对每个字形做一次轻微、平滑的变形（缩放、斜切、旋转加低频弯曲）。
+
+`glyph_sets=1` 同时关闭两者。
+
+### 手写多套
+
+浏览器采集页顶栏的“当前套”可以切到第 1–8 套，每套各自保存，构建时一起提交。纸笔方式：
+
+```bash
+# 模板打印 3 遍，页眉标“第 k/3 套”
+python -m handnote symbols template -o out/math-symbols.pdf --sets 3
+# 3 套共 9 页一起传入，按文件名自然排序，每 3 页算一套
+python -m handnote symbols build scan-*.png -m out/math-symbols.json \
+    -o out/merged.ttf --merge ~/.cache/handnote/fonts/ZhiMangXing-Regular.ttf
+```
+
+构建出的字体里，第一套是默认字形（cmap），其余是 `uniXXXX.sN` 变体，并写入两个 OpenType 特性，所以装到系统里同样有效：
+
+| 特性 | 谁会用 | 效果 |
+|---|---|---|
+| `rand` | HarfBuzz（浏览器、LibreOffice 等）默认开启 | 每个字随机取一套 |
+| `calt` | Word 需在“字体 → 高级”勾选上下文替代 | 连续出现的字依次轮换各套 |
+
+合并到基础字体时，变体只跟随新增的码位；基础字体已有的字符不会获得手写变体。
+
+### 渲染细节
+
+- 公式：matplotlib 排版后逐字形替换轮廓，包括 STIX 回退的符号。
+- 矩阵单元格、正文、页码：每套生成一份只含本页所需字符的小字体，仍由 FreeType 光栅化。
+- 同一字符在同一套里形状固定，由 `(seed, 码位, 套号)` 决定；同种子输出逐字节一致。
+
+```bash
+python -m handnote render notes.md --set glyph_sets=6 --set glyph_strength=1.4
+python -m handnote render notes.md --set glyph_sets=1   # 关闭
+```
 
 ## 参数
 
@@ -113,6 +157,8 @@ python -m handnote symbols capture capture.json -m out/math-symbols.json \
 | `ink_alpha_min` / `max` | 238 / 255 | 墨色深浅范围 |
 | `math_scale` / `display_size` | 1.12 / 36 | 行内公式比例、独立公式字号 |
 | `paper_noise` / `paper_gradient` | 1.6 / 3.0 | 纸张噪声与纵向渐变 |
+| `glyph_sets` | 4 | 字形套数；1 为关闭，每次出现随机取一套且不与上次相同 |
+| `glyph_strength` | 1.0 | 各套之间的字形差异幅度，0 等于关闭 |
 | `seed` | 11 | 随机种子，同种子输出逐字节一致 |
 | `dpi` | 150 | PDF 物理尺寸 |
 
@@ -141,13 +187,13 @@ pip install -e ".[test]"
 python -m pytest -q
 ```
 
-68 个测试覆盖解析、渲染、字形覆盖、模板几何、扫描建字体、笔画光栅化、字体合并与 HTTP 接口。渲染测试断言同种子逐字节一致，扫描测试用 DejaVu 模拟手写填格后端到端构建字体。
+103 个测试覆盖解析、渲染、字形套与手写变体、字形覆盖、模板几何、扫描建字体、笔画光栅化、字体合并与 HTTP 接口。渲染测试断言同种子逐字节一致，扫描测试用 DejaVu 模拟手写填格后端到端构建字体。
 
 ## 边界
 
 - 输出是位图，不是字体文件；要在 Word 里打字仍需要 wefont 那条线。
 - Word 的公式走 OMML，不经过本渲染器，逐字抖动无法带入。
-- 一个字只有一个字形，重复字仍完全一致；变体方案见 TODO。
+- 手写多套只作用于通过补字合并进来的字符；基础字体自带的汉字、字母仍用合成多套。
 - 扫描件需整页平放、无透视；倾斜过大的页面会切格错位。
 
 ## 文档
@@ -168,7 +214,9 @@ python -m pytest -q
 | 扫描 → TTF → 合并字体 | [VERIFIED] | `tests/test_symbols.py::test_scan_round_trip` |
 | 浏览器笔画 → TTF → 合并 | [VERIFIED] | `tests/test_capture.py` |
 | 本地 Web UI 与 API | [VERIFIED] | `tests/test_webui.py` |
-| 字形变体（OpenType `rand` / `calt`） | [PLANNED] | TODO.md |
+| 手写多套 → 字体变体（`rand` / `calt`）→ 渲染 | [VERIFIED] | `tests/test_sets.py` |
+| 多套字形（公式、矩阵、正文，渲染期合成） | [VERIFIED] | `tests/test_variants.py`, `tests/test_render.py::test_repeated_formula_glyphs_differ` |
+| 行内矩阵、公式内多矩阵 | [VERIFIED] | `tests/test_render.py::test_inline_matrix_renders_and_grows_line` |
 | 透视校正的扫描切格 | [PLANNED] | TODO.md |
 
 ## 许可

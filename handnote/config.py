@@ -34,6 +34,8 @@ _LIMITS: dict[str, tuple[float, float]] = {
     "seed": (0, 2**31 - 1),
     "dpi": (60, 600),
     "matrix_gap": (0.0, 3.0),
+    "glyph_sets": (1, 8),
+    "glyph_strength": (0.0, 3.0),
 }
 
 
@@ -71,6 +73,8 @@ class RenderConfig:
     paper_gradient: float = 3.0
     page_numbers: bool = True
     matrix_gap: float = 0.9
+    glyph_sets: int = 4
+    glyph_strength: float = 1.0
     seed: int = 11
     dpi: int = 150
 
@@ -138,6 +142,6 @@ def _coerce(key: str, value: Any) -> Any:
         return int(value)
     if key in ("page_width", "page_height", "margin_x", "margin_top", "margin_bottom",
                "body_size", "h1_size", "h2_size", "h3_size", "ink_alpha_min",
-               "ink_alpha_max", "display_size", "paper_base", "seed", "dpi"):
+               "ink_alpha_max", "display_size", "paper_base", "seed", "dpi", "glyph_sets"):
         return int(round(float(value)))
     return float(value)

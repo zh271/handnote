@@ -83,11 +83,13 @@ def cmd_symbols_template(args: argparse.Namespace) -> int:
     pdf = Path(args.out)
     spec_path = Path(args.json) if args.json else pdf.with_suffix(".json")
     template = write_template(pdf, spec_path, chars=chars, cell_mm=args.cell_mm,
-                              cols=args.cols, rows=args.rows, dpi=args.dpi)
+                              cols=args.cols, rows=args.rows, dpi=args.dpi,
+                              sets=args.sets)
     print(json.dumps({
         "pdf": str(pdf),
         "spec": str(spec_path),
-        "pages": template.pages,
+        "pages": template.pages * template.sets,
+        "sets": template.sets,
         "cells": len(template.cells),
         "guide_missing": "".join(template.guide_missing),
     }, ensure_ascii=False, indent=1))
@@ -104,6 +106,7 @@ def cmd_symbols_build(args: argparse.Namespace) -> int:
         merged = merge_fonts(args.merge, raw, out)
         report["merged_into"] = args.merge
         report["merged_added"] = merged["added"]
+        report["merged_alternates"] = merged["alternates"]
         report["font"] = str(out)
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0 if report["glyphs"] else 1
@@ -142,6 +145,7 @@ def cmd_symbols_capture(args: argparse.Namespace) -> int:
         merged = merge_fonts(args.merge, raw, out)
         report["merged_into"] = args.merge
         report["merged_added"] = merged["added"]
+        report["merged_alternates"] = merged["alternates"]
         report["font"] = str(out)
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0 if report["glyphs"] else 1
@@ -195,10 +199,13 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--cols", type=int, default=7)
     st.add_argument("--rows", type=int, default=10)
     st.add_argument("--dpi", type=int, default=300)
+    st.add_argument("--sets", type=int, default=1,
+                    help="print the grid this many times, one per handwritten set")
     st.set_defaults(func=cmd_symbols_template)
 
     sb = ssub.add_parser("build", help="trace scanned pages into a TTF")
-    sb.add_argument("scans", nargs="+", help="scan images, in page order")
+    sb.add_argument("scans", nargs="+",
+                    help="scan images; every template's worth of pages is one set")
     sb.add_argument("-m", "--spec", required=True, help="template JSON")
     sb.add_argument("-o", "--out", default="out/handnote-symbols.ttf")
     sb.add_argument("--threshold", type=int, default=128)
