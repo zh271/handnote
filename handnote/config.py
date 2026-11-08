@@ -34,6 +34,11 @@ _LIMITS: dict[str, tuple[float, float]] = {
     "seed": (0, 2**31 - 1),
     "dpi": (60, 600),
     "matrix_gap": (0.0, 3.0),
+    "char_spacing": (0.0, 0.6),
+    "digit_spacing": (0.0, 0.6),
+    "symbol_spacing": (0.0, 0.6),
+    "punct_squeeze": (0.0, 1.0),
+    "math_gap": (0.0, 1.0),
     "glyph_sets": (1, 8),
     "glyph_strength": (0.0, 3.0),
 }
@@ -73,6 +78,11 @@ class RenderConfig:
     paper_gradient: float = 3.0
     page_numbers: bool = True
     matrix_gap: float = 0.9
+    char_spacing: float = 0.12
+    digit_spacing: float = 0.06
+    symbol_spacing: float = 0.08
+    punct_squeeze: float = 1.0
+    math_gap: float = 0.25
     glyph_sets: int = 4
     glyph_strength: float = 1.0
     seed: int = 11

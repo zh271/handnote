@@ -73,6 +73,7 @@
 1. 每格按 `size`（默认 256）光栅化，线宽 `width * size * (0.7 + 0.6 * 平均压力)`。
 2. 圆头圆角，端点补圆点。
 3. 送入 `_cell_glyph()`，与扫描件共用描摹与平滑。
+4. 描摹后按模板描红字的墨迹框和基线对齐：大小取 `(描红/手写)^(1-keep)`，中心取 `描红中心 + keep × (手写中心 − 描红中心)`；`keep=1` 时退回旧行为（字底统一放在 y=60）。
 
 越界坐标会被钳到 `[0,1]`；`index` 越界、NaN、非数字坐标直接抛 `CaptureError`（HTTP 400）。
 
@@ -113,7 +114,8 @@
 `merge_fonts(base, overlay, out)`：
 
 - 只处理 TrueType（`glyf`）字体，CFF 会报错。
-- 遍历 overlay 的 cmap，跳过 base 已覆盖的码位。
+- 遍历 overlay 的 cmap，默认跳过 base 已覆盖的码位。
+- `replace=True`（CLI `--replace`，API `"replace": true`）时，overlay 带的码位改指到手写字形：按旧字形的包围盒缩放（高度足够时按高度，扁平字符按宽度，比例钳在 0.4–2.5），垂直中心对齐、沿用旧字形的左右留白；旧字形不删除。报告里 `replaced_chars` 列出被替换的字符。
 - 复制 `glyf` 轮廓与 `hmtx` 度量，写入 base 的 cmap 所有 Unicode 子表。
 - `post` 表降为 3.0（无字形名），避免名字表冲突。
 - 家族名追加后缀（默认 `" Math"`），方便与 base 同时安装。

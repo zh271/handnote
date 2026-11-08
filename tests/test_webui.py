@@ -211,6 +211,22 @@ def test_capture_endpoint_with_sets(server):
     assert "merged_into" not in report
 
 
+def test_capture_replace_and_font_listed(server):
+    spec = json.loads(_request(server, "/api/symbols/template.json?cell_mm=12&dpi=150")[2])
+    index = next(cell["index"] for cell in spec["cells"] if cell["char"] == "0")
+    capture = {"cells": [{"index": index, "strokes": [[[0.5, 0.1], [0.2, 0.5], [0.5, 0.9],
+                                                       [0.8, 0.5], [0.5, 0.1]]]}]}
+    payload = json.dumps({"spec": spec, "capture": capture, "merge": True,
+                          "replace": True}).encode()
+    status, _headers, raw = _request(server, "/api/symbols/capture", data=payload,
+                                     headers={"Content-Type": "application/json"})
+    assert status == 200, raw
+    report = json.loads(raw)
+    assert report["merged_replaced"] == "0"
+    fonts = json.loads(_request(server, "/api/state")[2])["fonts"]
+    assert report["font"] in [font["path"] for font in fonts]
+
+
 def test_template_json_with_sets(server):
     status, _headers, body = _request(
         server, "/api/symbols/template.json?cell_mm=12&dpi=150&sets=2")

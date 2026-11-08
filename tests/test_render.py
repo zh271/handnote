@@ -135,7 +135,7 @@ def test_single_set_formula_matches_plain_textpath(cfg):
     from matplotlib.font_manager import FontProperties
     from matplotlib.textpath import TextPath
 
-    renderer = Renderer(cfg.replace(glyph_sets=1))
+    renderer = Renderer(cfg.replace(glyph_sets=1, digit_spacing=0.0))
     ours = renderer._math_path("$x^2+\\frac{a}{b}$", 90, "k").vertices
     ref = TextPath((0, 0), "$x^2+\\frac{a}{b}$", size=90,
                    prop=FontProperties(size=90)).vertices

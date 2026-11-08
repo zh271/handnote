@@ -12,6 +12,7 @@ import logging
 import math
 import random
 import threading
+import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,14 @@ _NO_LINE_START = set("，。、；：？！）》”’】」』%")
 
 _ATOMIC_ASCII = set("._-/'()")
 
+#: Full-width punctuation whose glyph sits inside a mostly empty em box.
+#: It is re-spaced from its ink instead of its advance width.
+_OPENING_PUNCT = set("（《〈「『【〔“‘")
+_CLOSING_PUNCT = set("，。、；：？！）》〉」』】〕”’")
+_SQUEEZE_PUNCT = _OPENING_PUNCT | _CLOSING_PUNCT | set("…—～·")
+#: Padding (em) kept around squeezed punctuation: ``(before, after)``.
+_PUNCT_PAD = {"opening": (0.16, 0.06), "closing": (0.06, 0.16), "middle": (0.08, 0.08)}
+
 _CLOSEPOLY = MplPath.CLOSEPOLY
 
 
@@ -91,6 +100,28 @@ def _tokenize(segments: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
     return toks
 
 
+def _drop_math_spaces(toks: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Drop spaces typed around inline math when the other side is CJK.
+
+    ``设集合 $A$ 上`` would otherwise get a word space on top of the formula's
+    own gap. Spaces between a formula and Latin text (``where $x$ is``) stay.
+    """
+    out: list[tuple[str, str]] = []
+    for i, tok in enumerate(toks):
+        if tok[0] == "t" and tok[1].isspace():
+            prev = toks[i - 1] if i > 0 else None
+            nxt = toks[i + 1] if i + 1 < len(toks) else None
+            if (prev and prev[0] == "m") or (nxt and nxt[0] == "m"):
+                other = nxt if prev and prev[0] == "m" else prev
+                latin = (other is not None and other[0] == "t" and other[1]
+                         and other[1][0 if other is nxt else -1].isascii()
+                         and other[1][0 if other is nxt else -1].isalnum())
+                if not latin:
+                    continue
+        out.append(tok)
+    return out
+
+
 @dataclass
 class _State:
     rng: random.Random
@@ -110,6 +141,9 @@ class Renderer:
         self._math_cache: dict[tuple[str, int], tuple[Image.Image, float]] = {}
         self._glyph_paths: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
         self._own_fonts: dict[str, bool] = {}
+        self._ink_cache: dict[tuple[str, int], tuple[int, int] | None] = {}
+        self._set_width_cache: dict[tuple[str, int], float] = {}
+        self._math_ink: dict[tuple[str, int], tuple[int, int]] = {}
         self._sets: GlyphSets | None = None
         self.warnings: list[str] = []
         self._apply_mathtext()
@@ -211,21 +245,34 @@ class Renderer:
         picker = SetPicker(cfg.glyph_sets, random.Random(f"{cfg.seed}|math|{key}"))
         verts: list[np.ndarray] = []
         codes: list[np.ndarray] = []
-        for glyph in glyphs:
-            if len(glyph) == 6:
-                font, fontsize, ccode, index, ox, oy = glyph
-            else:
-                font, fontsize, ccode, ox, oy = glyph
-                index = font.get_char_index(ccode)
+        items = [g if len(g) == 6 else (g[0], g[1], g[2], g[0].get_char_index(g[2]), g[3], g[4])
+                 for g in glyphs]
+        # Inside formulas digit_spacing goes between two adjacent digits and
+        # symbol_spacing after a comma or semicolon, so "{1,2,3}" opens up
+        # behind each comma instead of between a digit and its comma.
+        ordered = sorted(items, key=lambda g: g[4])
+        gaps: list[tuple[float, float]] = []
+        for cur, nxt in zip(ordered, ordered[1:], strict=False):
+            ch, after = chr(cur[2]), chr(nxt[2])
+            if ch.isdigit() and after.isdigit():
+                gaps.append((cur[4], cfg.digit_spacing * cur[1]))
+            elif ch in ",;":
+                gaps.append((cur[4], cfg.symbol_spacing * cur[1]))
+
+        def shift(x: float) -> float:
+            return sum(extra for gx, extra in gaps if gx < x - 1e-6)
+
+        for font, fontsize, ccode, index, ox, oy in items:
             hand = (handwritten_sets(self.font_path, ccode)
                     if cfg.glyph_sets > 1 and self._is_own_font(font.fname) else 0)
             k = picker.pick(ccode, hand or None)
             v, c = self._math_glyph(font, index, ccode, k, hand > 0)
             if len(v) == 0:
                 continue
-            verts.append(v * (fontsize / unit) + (ox, oy))
+            verts.append(v * (fontsize / unit) + (ox + shift(ox), oy))
             codes.append(c)
         for ox, oy, w, h in rects:
+            ox += shift(ox)
             verts.append(np.array([(ox, oy), (ox, oy + h), (ox + w, oy + h),
                                    (ox + w, oy), (ox, oy), (0, 0)], dtype=float))
             codes.append(np.array([MplPath.MOVETO] + [MplPath.LINETO] * 4
@@ -438,15 +485,14 @@ class Renderer:
             size = self.heading_size(kind) if kind in ("h1", "h2", "h3") else cfg.body_size
             indent = 16 if kind == "bullet" else 0
             avail = cfg.page_width - 2 * cfg.margin_x - indent
-            toks = _tokenize(block.segments)
+            toks = _drop_math_spaces(_tokenize(block.segments))
             cur: list[tuple[str, str]] = []
             x = 0.0
             for tok in toks:
                 if tok[0] == "m":
-                    img, _ = self.math_image(tok[1], round(size * cfg.math_scale))
-                    w = img.width + 12
+                    w = self.math_advance(tok[1], size)[1]
                 else:
-                    w = self.font(size).getlength(tok[1])
+                    w = sum(self.char_metrics(ch, size)[1] for ch in tok[1])
                 if x + w > avail and cur:
                     if tok[0] == "t" and tok[1] and tok[1][0] in _NO_LINE_START:
                         cur.append(tok)
@@ -462,6 +508,88 @@ class Renderer:
             if kind in ("h1", "h2"):
                 lines.append({"kind": "gap", "h": 6})
         return lines
+
+    # -- spacing ----------------------------------------------------------
+    def _ink(self, ch: str, px: int) -> tuple[int, int] | None:
+        """Horizontal ink extent of ``ch`` relative to its origin, in pixels."""
+        key = (ch, px)
+        if key not in self._ink_cache:
+            side = px * 3
+            img = Image.new("L", (side, side), 0)
+            ImageDraw.Draw(img).text((px, px * 2), ch, font=self.font(px), fill=255,
+                                     anchor="ls")
+            box = img.getbbox()
+            self._ink_cache[key] = None if box is None else (box[0] - px, box[2] - px)
+        return self._ink_cache[key]
+
+    def _glyph_advance(self, ch: str, size: int, k: int | None) -> float:
+        """Advance of ``ch``: set ``k``'s glyph, or the widest set for layout.
+
+        Handwritten sets of one character can differ a lot in width, so the
+        pen follows the set actually drawn and line breaking plans for the
+        widest one.
+        """
+        sets = self._sets
+        if sets is None or not sets.has(ch):
+            return self.font(size).getlength(ch)
+        if k is not None:
+            return sets.font(k, size).getlength(ch)
+        key = (ch, size)
+        cache = self._set_width_cache
+        if key not in cache:
+            cache[key] = max(sets.font(n, size).getlength(ch)
+                             for n in range(sets.choices(ch)))
+        return cache[key]
+
+    def char_metrics(self, ch: str, size: int, k: int | None = None) -> tuple[float, float]:
+        """Return ``(shift, advance)`` for one character at ``size``.
+
+        ``shift`` moves the glyph right of the pen position; ``advance`` is
+        how far the pen moves. ``k`` is the glyph set being drawn (``None``
+        while measuring). CJK glyphs get ``char_spacing``, digits
+        ``digit_spacing``, other symbols ``symbol_spacing`` and Latin letters
+        a quarter of ``char_spacing``; full-width punctuation is re-spaced
+        from its ink, blended by ``punct_squeeze``.
+        """
+        cfg = self.cfg
+        if ch.isspace():
+            return 0.0, self.font(size).getlength(ch)
+        advance = self._glyph_advance(ch, size, k)
+        if ch in _SQUEEZE_PUNCT and cfg.punct_squeeze > 0:
+            ink = self._ink(ch, size)
+            if ink is not None:
+                left, right = ink
+                role = ("opening" if ch in _OPENING_PUNCT
+                        else "closing" if ch in _CLOSING_PUNCT else "middle")
+                pad_before, pad_after = (p * size for p in _PUNCT_PAD[role])
+                t = cfg.punct_squeeze
+                before = (1 - t) * left + t * pad_before
+                after = (1 - t) * (advance - right) + t * pad_after
+                return before - left, before + (right - left) + after
+        if ch.isdigit():
+            em = cfg.digit_spacing
+        elif ch.isascii() and ch.isalpha():
+            em = cfg.char_spacing * 0.25
+        elif ch.isascii() or unicodedata.category(ch).startswith("S"):
+            em = cfg.symbol_spacing
+        else:
+            em = cfg.char_spacing
+        return 0.0, advance + em * size
+
+    def math_advance(self, tex: str, size: int) -> tuple[float, float]:
+        """Return ``(shift, advance)`` for an inline formula.
+
+        The formula is placed by its ink, with ``math_gap`` em on each side.
+        """
+        px = round(size * self.cfg.math_scale)
+        key = (tex, px)
+        if key not in self._math_ink:
+            img, _ = self.math_image(tex, px)
+            box = img.getchannel("A").getbbox() or (0, 0, img.width, img.height)
+            self._math_ink[key] = (box[0], box[2])
+        left, right = self._math_ink[key]
+        gap = self.cfg.math_gap * size
+        return gap - left, gap + (right - left) + gap
 
     def _text_line(self, kind: str, size: int, indent: int,
                    toks: list[tuple[str, str]]) -> dict:
@@ -544,15 +672,17 @@ class Renderer:
         cfg = self.cfg
         rng = state.rng
         if ch.isspace():
-            return self.font(size).getlength(ch)
+            return self.char_metrics(ch, size)[1]
+        k = None
+        if self._sets is not None and state.picker is not None and self._sets.has(ch):
+            k = state.picker.pick(ord(ch), self._sets.choices(ch))
+        shift, pen_advance = self.char_metrics(ch, size, k)
+        x += shift
         wobble = int(round(cfg.size_wobble))
         fs = size + (rng.choice([-wobble, 0, 0, 0, wobble]) if wobble > 0 else 0)
         fs = max(1, fs)
-        font = self.font(fs)
+        font = self.font(fs) if k is None else self._sets.font(k, fs)
         advance = font.getlength(ch)
-        if self._sets is not None and state.picker is not None and self._sets.has(ch):
-            k = state.picker.pick(ord(ch), self._sets.choices(ch))
-            font = self._sets.font(k, fs)
         side = max(8, int(size * 2.5))
         tile = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         alpha = rng.randint(cfg.ink_alpha_min, cfg.ink_alpha_max)
@@ -575,7 +705,7 @@ class Renderer:
         canvas.alpha_composite(
             tile, (int(x - side * 0.25 + ox), int(baseline - side * 0.80 + oy))
         )
-        return advance
+        return pen_advance
 
     def draw_matrix(
         self,
@@ -650,8 +780,10 @@ class Renderer:
             for tok_kind, value in line["toks"]:
                 if tok_kind == "m":
                     img, base = self.math_image(value, round(size * cfg.math_scale))
-                    canvas.alpha_composite(img, (int(x + 6), int(baseline - base)))
-                    x += img.width + 12
+                    shift, advance = self.math_advance(value, size)
+                    canvas.alpha_composite(img, (int(round(x + shift)),
+                                                 int(baseline - base)))
+                    x += advance
                 else:
                     for ch in value:
                         x += self.draw_char(canvas, x, baseline, ch, size, state,
@@ -675,28 +807,32 @@ class Renderer:
         """Render blocks into page images (RGB, one per page)."""
         with _LOCK:
             self._apply_mathtext()
+            self._prepare_sets(blocks)
             lines = self.layout(blocks)
             pages = self.paginate(lines)
             state = _State(random.Random(self.cfg.seed),
                            np.random.default_rng(self.cfg.seed))
-            self._prepare_sets(lines, len(pages))
             if self._sets is not None:
                 state.picker = SetPicker(self.cfg.glyph_sets, state.rng)
             return [self.render_page(page, i + 1, len(pages), state)
                     for i, page in enumerate(pages)]
 
-    def _prepare_sets(self, lines: list[dict], pages: int) -> None:
-        """Build per-set fonts for every character ``draw_char`` will draw."""
+    def _prepare_sets(self, blocks: list[Block]) -> None:
+        """Build per-set fonts for every character ``draw_char`` will draw.
+
+        Runs before layout so line breaking can measure each set's width.
+        """
         cfg = self.cfg
+        self._set_width_cache = {}
         if cfg.glyph_sets <= 1:
             self._sets = None
             return
         chars: set[str] = set()
-        for line in lines:
-            for kind, value in line.get("toks", ()):
+        for block in blocks:
+            for kind, value in block.segments:
                 if kind == "t":
                     chars.update(value)
-            for row in line.get("rows", ()):
+            for row in block.payload.get("rows", ()):
                 chars.update(cell for cell in row if len(cell) == 1)
         if cfg.page_numbers:
             chars.update("0123456789")

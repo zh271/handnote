@@ -40,6 +40,9 @@ async function boot() {
   buildSetPicker();
 
   $("set").addEventListener("change", () => switchSet(Number($("set").value)));
+  $("keep").addEventListener("input", () => {
+    $("keep-out").textContent = Number($("keep").value).toFixed(2);
+  });
   $("undo").addEventListener("click", undo);
   $("reset-all").addEventListener("click", resetAll);
   $("export").addEventListener("click", exportJson);
@@ -329,6 +332,8 @@ async function buildFont() {
         spec: state.spec,
         capture: payload(),
         merge: $("merge").checked,
+        replace: $("replace").checked,
+        keep: Number($("keep").value),
       }),
     });
     const data = await res.json();
@@ -338,7 +343,11 @@ async function buildFont() {
       `构建完成：<b>${data.glyphs}</b> 个字形` +
       (data.sets > 1 ? `，最多 <b>${data.sets}</b> 套（变体 ${data.alternates} 个）` : "") +
       (data.merged_added !== undefined ? `，合并新增 <b>${data.merged_added}</b> 个码位` : "") +
+      (data.merged_replaced ? `，覆盖 <b>${data.merged_replaced.length}</b> 个原有字符` : "") +
       ` · <a href="${data.url}" download>下载 TTF</a>` +
+      (data.merged_into
+        ? ` · <a href="/?font=${encodeURIComponent(data.font)}" target="_blank">在渲染器中使用</a>`
+        : "") +
       (missing.length
         ? `<div class="miss">未写：${missing.join(" ")}</div>`
         : "");

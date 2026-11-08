@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 import urllib.request
 from pathlib import Path
 
@@ -52,11 +53,26 @@ def list_fonts(extra_dirs: list[Path] | None = None) -> list[dict[str, str]]:
         path = CACHE_DIR / name
         if path.is_file():
             found[name] = {"name": name, "path": str(path), "source": "cache"}
-        for d in extra_dirs or []:
-            cand = Path(d) / name
-            if cand.is_file():
-                found[name] = {"name": name, "path": str(cand), "source": "upload"}
-    return sorted(found.values(), key=lambda f: f["name"].lower())
+    fonts = sorted(found.values(), key=lambda f: f["name"].lower())
+    # Built and uploaded fonts, newest first. Raw symbol-only fonts
+    # (capture-*/symbols-*) lack CJK glyphs, so only merged ones are listed.
+    uploads: list[tuple[float, dict[str, str]]] = []
+    for d in extra_dirs or []:
+        folder = Path(d)
+        if not folder.is_dir():
+            continue
+        for path in folder.iterdir():
+            if path.suffix.lower() not in (".ttf", ".otf", ".ttc") or not path.is_file():
+                continue
+            if path.name.startswith(("capture-", "symbols-")):
+                continue
+            stamp = path.stat().st_mtime
+            label = path.name
+            if path.name.startswith("merged-"):
+                label = "手写合并 " + time.strftime("%m-%d %H:%M", time.localtime(stamp))
+            uploads.append((stamp, {"name": label, "path": str(path), "source": "upload"}))
+    uploads.sort(key=lambda item: item[0], reverse=True)
+    return fonts + [entry for _, entry in uploads]
 
 
 def ensure_font(key: str, timeout: float = 60.0) -> Path:

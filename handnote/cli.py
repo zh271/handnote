@@ -101,11 +101,12 @@ def cmd_symbols_build(args: argparse.Namespace) -> int:
     out = Path(args.out)
     raw = out.with_name(f"{out.stem}-symbols.ttf") if args.merge else out
     report = build_font([Path(p) for p in args.scans], spec, raw,
-                        threshold=args.threshold)
+                        threshold=args.threshold, keep=args.keep)
     if args.merge and report["glyphs"]:
-        merged = merge_fonts(args.merge, raw, out)
+        merged = merge_fonts(args.merge, raw, out, replace=args.replace)
         report["merged_into"] = args.merge
         report["merged_added"] = merged["added"]
+        report["merged_replaced"] = merged["replaced_chars"]
         report["merged_alternates"] = merged["alternates"]
         report["font"] = str(out)
     print(json.dumps(report, ensure_ascii=False, indent=1))
@@ -140,11 +141,12 @@ def cmd_symbols_capture(args: argparse.Namespace) -> int:
         data = data["capture"]
     out = Path(args.out)
     raw = out.with_name(f"{out.stem}-symbols.ttf") if args.merge else out
-    report = build_capture_font(data, spec, raw, size=args.size)
+    report = build_capture_font(data, spec, raw, size=args.size, keep=args.keep)
     if args.merge and report["glyphs"]:
-        merged = merge_fonts(args.merge, raw, out)
+        merged = merge_fonts(args.merge, raw, out, replace=args.replace)
         report["merged_into"] = args.merge
         report["merged_added"] = merged["added"]
+        report["merged_replaced"] = merged["replaced_chars"]
         report["merged_alternates"] = merged["alternates"]
         report["font"] = str(out)
     print(json.dumps(report, ensure_ascii=False, indent=1))
@@ -211,6 +213,12 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--threshold", type=int, default=128)
     sb.add_argument("--merge", metavar="BASE_FONT",
                     help="merge the traced symbols into a base font (glyf-based)")
+    sb.add_argument("--keep", type=float, default=0.3,
+                    help="share of size/position error kept after aligning to the guide "
+                         "(0 = snap to guide, 1 = raw)")
+    sb.add_argument("--replace", action="store_true",
+                    help="with --merge: handwritten glyphs replace the base font's own "
+                         "(digits, letters...); unwritten characters are kept")
     sb.set_defaults(func=cmd_symbols_build)
 
     sc = ssub.add_parser("capture", help="build a font from a browser capture JSON")
@@ -219,6 +227,10 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("-o", "--out", default="out/handnote-symbols.ttf")
     sc.add_argument("--size", type=int, default=256, help="raster size per cell")
     sc.add_argument("--merge", metavar="BASE_FONT")
+    sc.add_argument("--keep", type=float, default=0.3,
+                    help="share of size/position error kept after aligning to the guide")
+    sc.add_argument("--replace", action="store_true",
+                    help="with --merge: handwritten glyphs replace the base font's own")
     sc.set_defaults(func=cmd_symbols_capture)
 
     ss = ssub.add_parser("simulate", help="fill a template with a font for testing")

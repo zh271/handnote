@@ -332,15 +332,20 @@ class Handler(BaseHTTPRequestHandler):
             paths.append(target)
         spec = Template.from_dict(json.loads(spec_text))
         out = UPLOAD_DIR / f"symbols-{uuid.uuid4().hex[:8]}.ttf"
-        report = build_font(paths, spec, out)
+        keep = next((float(p.data.decode("utf-8")) for p in parts
+                     if p.name == "keep" and p.data.strip()), 0.3)
+        report = build_font(paths, spec, out, keep=keep)
         merge_into = next((p.data.decode("utf-8").strip() for p in parts
                            if p.name == "merge" and p.data), "")
+        replace = next((p.data.decode("utf-8").strip().lower() in ("1", "true", "on")
+                        for p in parts if p.name == "replace"), False)
         if merge_into and report["glyphs"] and Path(merge_into).is_file():
             merged = UPLOAD_DIR / f"merged-{uuid.uuid4().hex[:8]}.ttf"
-            result = merge_fonts(merge_into, out, merged)
+            result = merge_fonts(merge_into, out, merged, replace=replace)
             report["font"] = str(merged)
             report["merged_into"] = merge_into
             report["merged_added"] = result["added"]
+            report["merged_replaced"] = result["replaced_chars"]
             report["merged_alternates"] = result["alternates"]
         report["url"] = "/api/font-file/" + Path(report["font"]).name
         return self._json(report)
@@ -355,7 +360,9 @@ class Handler(BaseHTTPRequestHandler):
         spec = Template.from_dict(spec_data)
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         out = UPLOAD_DIR / f"capture-{uuid.uuid4().hex[:8]}.ttf"
-        report = build_capture_font(capture, spec, out)
+        keep = payload.get("keep")
+        report = build_capture_font(capture, spec, out,
+                                    keep=0.3 if keep is None else float(keep))
         merge_into = payload.get("merge")
         if merge_into is False:
             merge_into = ""
@@ -366,10 +373,12 @@ class Handler(BaseHTTPRequestHandler):
                 merge_into = ""
         if merge_into and report["glyphs"] and Path(str(merge_into)).is_file():
             merged = UPLOAD_DIR / f"merged-{uuid.uuid4().hex[:8]}.ttf"
-            result = merge_fonts(str(merge_into), out, merged)
+            result = merge_fonts(str(merge_into), out, merged,
+                                 replace=bool(payload.get("replace")))
             report["font"] = str(merged)
             report["merged_into"] = str(merge_into)
             report["merged_added"] = result["added"]
+            report["merged_replaced"] = result["replaced_chars"]
             report["merged_alternates"] = result["alternates"]
         report["url"] = "/api/font-file/" + Path(report["font"]).name
         return self._json(report)

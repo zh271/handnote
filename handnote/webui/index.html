@@ -53,6 +53,16 @@
           <input type="range" id="display_size" min="20" max="64" step="1"></label>
         <label class="field"><span>行内公式比例 <b data-out="math_scale"></b></span>
           <input type="range" id="math_scale" min="0.8" max="1.6" step="0.02"></label>
+        <label class="field"><span>字距 (em) <b data-out="char_spacing"></b></span>
+          <input type="range" id="char_spacing" min="0" max="0.4" step="0.01"></label>
+        <label class="field"><span>数字间距 (em) <b data-out="digit_spacing"></b></span>
+          <input type="range" id="digit_spacing" min="0" max="0.4" step="0.01"></label>
+        <label class="field"><span>符号间距 (em) <b data-out="symbol_spacing"></b></span>
+          <input type="range" id="symbol_spacing" min="0" max="0.4" step="0.01"></label>
+        <label class="field"><span>标点收紧 <b data-out="punct_squeeze"></b></span>
+          <input type="range" id="punct_squeeze" min="0" max="1" step="0.05"></label>
+        <label class="field"><span>公式两侧留白 (em) <b data-out="math_gap"></b></span>
+          <input type="range" id="math_gap" min="0" max="0.6" step="0.01"></label>
         <label class="field"><span>倾斜抖动 (°) <b data-out="jitter_rot"></b></span>
           <input type="range" id="jitter_rot" min="0" max="4" step="0.05"></label>
         <label class="field"><span>水平抖动 <b data-out="jitter_dx"></b></span>
@@ -95,6 +105,9 @@
       <label class="field"><span>扫描图</span><input type="file" id="sym-scans" accept="image/*" multiple></label>
       <label class="field"><span>spec.json</span><input type="file" id="sym-spec" accept=".json"></label>
       <label class="check"><input type="checkbox" id="sym-merge" checked> 合并到当前字体（保留中文）</label>
+      <label class="check"><input type="checkbox" id="sym-replace" checked> 手写覆盖已有字符（数字、字母等）</label>
+      <label class="field"><span>保留书写误差（0 完全对齐描红字，1 原样）</span>
+        <input type="number" id="sym-keep" value="0.3" min="0" max="1" step="0.05"></label>
       <button class="btn primary" id="sym-build">构建字体</button>
       <div id="sym-result" class="coverage"></div>
     </div>

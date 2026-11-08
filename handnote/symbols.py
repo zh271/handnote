@@ -315,8 +315,73 @@ def _emit_contour(pen: TTGlyphPen, points: np.ndarray, corner_deg: float = 62.0)
     pen.closePath()
 
 
-def _cell_glyph(crop: np.ndarray, upem: int, threshold: int) -> tuple[TTGlyphPen, int, int] | None:
-    """Trace one cell crop into a glyph; returns (pen, advance, lsb)."""
+#: Share of the writer's size/position error kept after aligning to the guide.
+DEFAULT_KEEP = 0.3
+
+GuideBox = tuple[float, float, float, float, float]
+_GUIDE_BOXES: dict[str, GuideBox | None] = {}
+
+
+def guide_box(ch: str) -> GuideBox | None:
+    """Ink box and baseline of the grey guide glyph, as fractions of the cell.
+
+    Returns ``(x0, y0, x1, y1, baseline_y)``. Mirrors :func:`build_template`:
+    guide font at 72% of the cell, centred with anchor ``mm``.
+    """
+    if ch in _GUIDE_BOXES:
+        return _GUIDE_BOXES[ch]
+    size = 400
+    path = _pick_font(_guide_fonts(), {}, ch)
+    box = None
+    if path is not None:
+        img = Image.new("L", (size, size), 0)
+        font = ImageFont.truetype(str(path), int(size * 0.72))
+        ImageDraw.Draw(img).text((size / 2, size / 2), ch, font=font, fill=255, anchor="mm")
+        bb = img.getbbox()
+        if bb is not None:
+            # Draw again with the baseline at the centre row; the ink shift
+            # between the two drawings locates the baseline.
+            ref = Image.new("L", (size, size * 2), 0)
+            ImageDraw.Draw(ref).text((size / 2, size), ch, font=font, fill=255, anchor="ms")
+            baseline = size - (ref.getbbox()[1] - bb[1])
+            box = (*(v / size for v in bb), baseline / size)
+    _GUIDE_BOXES[ch] = box
+    return box
+
+
+def _align_to_guide(polys: list[tuple[np.ndarray, bool]], h: int, w: int,
+                    target: GuideBox, keep: float
+                    ) -> list[tuple[np.ndarray, bool]]:
+    """Pull traced ink (crop pixels) towards the guide glyph's box.
+
+    Size and centre move to the guide; ``keep`` of the writer's deviation
+    remains (``keep=1`` leaves the ink untouched).
+    """
+    pts = np.vstack([p for p, _ in polys])
+    x0, y0 = pts.min(axis=0)
+    x1, y1 = pts.max(axis=0)
+    ink_size = max(x1 - x0, y1 - y0)
+    tx0, ty0, tx1, ty1 = target[0] * w, target[1] * h, target[2] * w, target[3] * h
+    guide_size = max(tx1 - tx0, ty1 - ty0)
+    if ink_size <= 1 or guide_size <= 1:
+        return polys
+    full = min(max(guide_size / ink_size, 0.5), 2.0)
+    scale = full ** (1.0 - keep)
+    ink_c = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+    guide_c = np.array([(tx0 + tx1) / 2, (ty0 + ty1) / 2])
+    centre = guide_c + keep * (ink_c - guide_c)
+    return [((p - ink_c) * scale + centre, hole) for p, hole in polys]
+
+
+def _cell_glyph(crop: np.ndarray, upem: int, threshold: int,
+                target: GuideBox | None = None,
+                keep: float = 1.0) -> tuple[TTGlyphPen, int, int] | None:
+    """Trace one cell crop into a glyph; returns (pen, advance, lsb).
+
+    With a guide ``target`` box the ink is aligned to it (see
+    :func:`_align_to_guide`) and keeps its height above the baseline;
+    without one every glyph is set on a fixed bottom line, as before.
+    """
     ink = (crop < threshold).astype(np.uint8)
     if ink.sum() < 12:
         return None
@@ -334,17 +399,26 @@ def _cell_glyph(crop: np.ndarray, upem: int, threshold: int) -> tuple[TTGlyphPen
         approx = cv2.approxPolyDP(contour, 0.9, True).reshape(-1, 2).astype(np.float64)
         if len(approx) < 3:
             continue
-        mapped = np.empty_like(approx)
-        mapped[:, 0] = (approx[:, 0] - cx) * scale + upem / 2
-        mapped[:, 1] = (0.9 * h - approx[:, 1]) * scale
         is_hole = hierarchy is not None and hierarchy[0][i][3] != -1
-        polys.append((mapped, is_hole))
+        polys.append((approx, is_hole))
     if not polys:
         return None
+    aligned = target is not None and keep < 1.0
+    base_y = 0.9 * h
+    if aligned:
+        polys = _align_to_guide(polys, h, w, target, keep)
+        base_y = target[4] * h
+    mapped_polys = []
+    for approx, is_hole in polys:
+        mapped = np.empty_like(approx)
+        mapped[:, 0] = (approx[:, 0] - cx) * scale + upem / 2
+        mapped[:, 1] = (base_y - approx[:, 1]) * scale
+        mapped_polys.append((mapped, is_hole))
+    polys = mapped_polys
 
     all_pts = np.vstack([p for p, _ in polys])
     dx = 60 - float(all_pts[:, 0].min())
-    dy = 60 - float(all_pts[:, 1].min())
+    dy = 0.0 if aligned else 60 - float(all_pts[:, 1].min())
     pen = TTGlyphPen(None)
     for points, is_hole in polys:
         points = points + np.array([dx, dy])
@@ -403,6 +477,7 @@ def assemble_font(
     upem: int = 1000,
     family: str = "HandNote Symbols",
     extra_sets: Sequence[dict[int, np.ndarray]] = (),
+    keep: float = DEFAULT_KEEP,
 ) -> dict:
     """Trace per-cell ink crops into a TTF; returns a build report.
 
@@ -418,12 +493,14 @@ def assemble_font(
     built: list[str] = []
     missing: list[str] = []
     all_sets = [crops, *extra_sets][:MAX_SETS]
+    keep = min(max(float(keep), 0.0), 1.0)
 
     for cell in spec.cells:
         shapes = []
         for set_crops in all_sets:
             crop = set_crops.get(cell.index)
-            traced = _cell_glyph(crop, upem, threshold) if crop is not None else None
+            traced = (_cell_glyph(crop, upem, threshold, guide_box(cell.char), keep)
+                      if crop is not None else None)
             if traced is not None:
                 shapes.append(traced)
         if not shapes:
@@ -484,6 +561,7 @@ def build_font(
     threshold: int = 128,
     upem: int = 1000,
     family: str = "HandNote Symbols",
+    keep: float = DEFAULT_KEEP,
 ) -> dict:
     """Trace scanned template pages into a TTF; returns a build report.
 
@@ -493,7 +571,7 @@ def build_font(
     spec = template if isinstance(template, Template) else Template.from_dict(template)
     sets = scan_sets(scans, spec)
     report = assemble_font(sets[0], spec, out_path, threshold=threshold, upem=upem,
-                           family=family, extra_sets=sets[1:])
+                           family=family, extra_sets=sets[1:], keep=keep)
     report["scanned_sets"] = len(sets)
     return report
 
@@ -549,8 +627,16 @@ def merge_fonts(
     out_path: str | Path,
     *,
     family_suffix: str = " Math",
+    replace: bool = False,
 ) -> dict:
-    """Merge overlay glyphs into a base font, keeping base glyphs on conflict."""
+    """Merge overlay glyphs into a base font.
+
+    By default base glyphs win on conflict. With ``replace=True`` every code
+    point the overlay carries (only what was handwritten) is remapped to the
+    handwritten glyph, fitted to the old glyph's box; the old glyph stays in
+    the font for composites and GSUB, and code points the overlay lacks, such
+    as every CJK character, are untouched.
+    """
     from copy import deepcopy
 
     from fontTools.ttLib import TTFont
@@ -572,31 +658,44 @@ def merge_fonts(
     mapping: dict[int, str] = {}
     new_alts: dict[str, list[str]] = {}
 
-    def copy_glyph(src_name: str, want: str) -> str:
+    upem = base["head"].unitsPerEm
+    replaced: list[str] = []
+
+    def copy_glyph(src_name: str, want: str, fit_to: str | None = None,
+                   fit_like: str | None = None) -> str:
         new_name = want
         n = 1
         while new_name in taken:
             new_name = f"{want}_{n}"
             n += 1
-        glyf.glyphs[new_name] = deepcopy(extra["glyf"][src_name])
-        hmtx.metrics[new_name] = extra["hmtx"][src_name]
+        fitted = (_fit_glyph(extra["glyf"], src_name, glyf, hmtx, fit_to, upem, fit_like)
+                  if fit_to else None)
+        if fitted is None:
+            glyf.glyphs[new_name] = deepcopy(extra["glyf"][src_name])
+            hmtx.metrics[new_name] = extra["hmtx"][src_name]
+        else:
+            glyf.glyphs[new_name], hmtx.metrics[new_name] = fitted
         if vmtx is not None:
-            head = base["head"]
-            vmtx.metrics[new_name] = (head.unitsPerEm, 0)
+            vmtx.metrics[new_name] = (upem, 0)
         order.append(new_name)
         taken.add(new_name)
         return new_name
 
     for code, name in sorted(extra_cmap.items()):
-        if code in base_cmap:
+        old = base_cmap.get(code)
+        if old is not None and not replace:
             skipped.append(chr(code))
             continue
-        new_name = copy_glyph(name, name if name not in taken else f"hn{code:04X}")
+        want = name if name not in taken else f"hn{code:04X}"
+        new_name = copy_glyph(name, want, fit_to=old)
         mapping[code] = new_name
-        added.append(chr(code))
+        (replaced if old is not None else added).append(chr(code))
         alts = extra_alts.get(name, [])
         if alts:
-            new_alts[new_name] = [copy_glyph(alt, f"{new_name}.s{n}")
+            # Alternates reuse the first set's scale, so the size variation
+            # between sets survives the fit.
+            new_alts[new_name] = [copy_glyph(alt, f"{new_name}.s{n}", fit_to=old,
+                                             fit_like=name)
                                   for n, alt in enumerate(alts, 1)]
     base.setGlyphOrder(order)
     base["maxp"].numGlyphs = len(order)
@@ -622,4 +721,51 @@ def merge_fonts(
     extra.close()
     return {"font": str(out), "added": len(added), "skipped": len(skipped),
             "chars": "".join(added), "kept": "".join(skipped),
+            "replaced": len(replaced), "replaced_chars": "".join(replaced),
             "alternates": sum(len(alts) for alts in new_alts.values())}
+
+
+def _glyph_bounds(table, name: str) -> tuple[float, float, float, float] | None:
+    glyph = table[name]
+    if glyph.numberOfContours == 0:
+        return None
+    glyph.recalcBounds(table)
+    if glyph.xMax <= glyph.xMin or glyph.yMax <= glyph.yMin:
+        return None
+    return glyph.xMin, glyph.yMin, glyph.xMax, glyph.yMax
+
+
+def _fit_glyph(src_table, src_name: str, ref_table, ref_hmtx, ref_name: str,
+               upem: int, like: str | None = None) -> tuple[object, tuple[int, int]] | None:
+    """Scale a handwritten glyph into the box of the glyph it replaces.
+
+    Keeps the replaced glyph's height (or width, for flat marks such as
+    ``-``), vertical centre and side bearings, so swapped digits and letters
+    sit on the same baseline at the same size as the rest of the font.
+    """
+    from fontTools.pens.transformPen import TransformPen
+
+    own = _glyph_bounds(src_table, src_name)
+    new = _glyph_bounds(src_table, like) if like else own
+    ref = _glyph_bounds(ref_table, ref_name)
+    if own is None or new is None or ref is None:
+        return None
+    nx0, ny0, nx1, ny1 = new
+    rx0, ry0, rx1, ry1 = ref
+    nw, nh, rw, rh = nx1 - nx0, ny1 - ny0, rx1 - rx0, ry1 - ry0
+    tall = 0.25 * upem
+    if nh > tall and rh > tall:
+        scale = rh / nh
+    elif nw > tall and rw > tall:
+        scale = rw / nw
+    else:
+        scale = min(rw / nw, rh / nh)
+    scale = min(max(scale, 0.4), 2.5)
+    dx = rx0 - scale * own[0]
+    dy = (ry0 + ry1) / 2 - scale * (ny0 + ny1) / 2
+    pen = TTGlyphPen(None)
+    src_table[src_name].draw(TransformPen(pen, (scale, 0, 0, scale, dx, dy)), src_table)
+    advance, _lsb = ref_hmtx[ref_name]
+    right = advance - rx1
+    width = int(round(rx0 + (own[2] - own[0]) * scale + right))
+    return pen.glyph(), (max(width, 1), int(round(rx0)))

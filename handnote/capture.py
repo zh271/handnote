@@ -23,7 +23,7 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .symbols import MAX_SETS, Template, assemble_font
+from .symbols import DEFAULT_KEEP, MAX_SETS, Template, assemble_font
 
 DEFAULT_WIDTH = 0.05
 MIN_SIZE = 64
@@ -184,12 +184,17 @@ def build_capture_font(
     size: int = 256,
     upem: int = 1000,
     family: str = "HandNote Symbols",
+    keep: float = DEFAULT_KEEP,
 ) -> dict:
-    """Turn a capture payload into a TTF; returns the build report."""
+    """Turn a capture payload into a TTF; returns the build report.
+
+    ``keep`` is the share of the writer's size/position error kept after
+    aligning each glyph to the template guide (1 = raw strokes).
+    """
     spec = template if isinstance(template, Template) else Template.from_dict(template)
     sets = capture_set_crops(data, spec, size)
     report = assemble_font(sets[0], spec, out_path, upem=upem, family=family,
-                           extra_sets=sets[1:])
+                           extra_sets=sets[1:], keep=keep)
     report["captured"] = len(set().union(*sets))
     report["captured_sets"] = len(sets)
     report["size"] = size

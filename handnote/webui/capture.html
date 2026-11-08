@@ -27,6 +27,11 @@
     <span id="progress">0 / 0</span>
     格已写 · 数据自动存在本机浏览器 · <a href="/">回到渲染器</a>
     <label class="check inline"><input type="checkbox" id="merge" checked> 合并到默认字体</label>
+    <label class="check inline" title="写过的数字、字母等替换默认字体里原有的字形；没写的字符和汉字不变">
+      <input type="checkbox" id="replace" checked> 手写覆盖已有字符</label>
+    <label class="field inline" title="每个字的大小和上下位置向浅灰描红字对齐；保留的比例越高，字形变化越大，0 为完全对齐，1 为原样">
+      <span>保留书写误差 <b id="keep-out">0.30</b></span>
+      <input id="keep" type="range" min="0" max="1" step="0.05" value="0.3"></label>
     <button id="reset-all" class="btn ghost small">清空本套</button>
   </div>
   <div id="pages"></div>

@@ -1,5 +1,7 @@
 const NUMERIC = [
-  "body_size", "line_height", "display_size", "math_scale", "jitter_rot",
+  "body_size", "line_height", "char_spacing", "digit_spacing",
+  "symbol_spacing", "punct_squeeze", "math_gap",
+  "display_size", "math_scale", "jitter_rot",
   "jitter_dx", "jitter_dy", "ink_alpha_min", "glyph_sets", "glyph_strength",
   "paper_noise", "seed",
 ];
@@ -156,6 +158,16 @@ async function boot() {
     select.appendChild(option);
   });
   if (boot.defaults.font_path) select.value = boot.defaults.font_path;
+  const wanted = new URLSearchParams(window.location.search).get("font");
+  if (wanted) {
+    if (![...select.options].some((option) => option.value === wanted)) {
+      const option = document.createElement("option");
+      option.value = wanted;
+      option.textContent = wanted.split(/[\\/]/).pop();
+      select.appendChild(option);
+    }
+    select.value = wanted;
+  }
 
   applyConfig(boot.defaults);
   const saved = localStorage.getItem("handnote:markdown");
@@ -249,6 +261,8 @@ function bindSymbols() {
     const form = new FormData();
     form.append("spec", spec);
     if ($("sym-merge").checked) form.append("merge", $("font-select").value);
+    if ($("sym-replace").checked) form.append("replace", "1");
+    form.append("keep", $("sym-keep").value || "0.3");
     for (const file of scans) form.append("scan", file);
     box.textContent = "构建中…";
     try {
@@ -259,7 +273,7 @@ function bindSymbols() {
         ` · <a href="${data.url}" download>下载 TTF</a>`;
       const option = document.createElement("option");
       option.value = data.font;
-      option.textContent = data.font.split("/").pop();
+      option.textContent = data.font.split(/[\\/]/).pop();
       $("font-select").appendChild(option);
       $("font-select").value = data.font;
       schedule(100);

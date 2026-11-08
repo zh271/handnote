@@ -32,7 +32,7 @@ ruff check handnote tests
 | `handnote/variants.py` | 多套字形：确定性轮廓变形、`SetPicker`、按套小字体 `GlyphSets`；手写变体优先 |
 | `handnote/opentype.py` | 手写多套 ↔ GSUB：`read_alternates`（读 `rand`）、`add_alternates`（追加 `rand`/`calt`） |
 | `handnote/coverage.py` | LaTeX → Unicode 映射；对比字体 cmap 报缺字 |
-| `handnote/render.py` | `Renderer`：layout（测量）→ paginate（分页）→ render_page（绘制） |
+| `handnote/render.py` | `Renderer`：layout（测量）→ paginate（分页）→ render_page（绘制）；`char_metrics` / `math_advance` 是 layout 与绘制共用的唯一宽度来源 |
 | `handnote/symbols.py` | 模板生成、cv2 描摹、`assemble_font`、`merge_fonts` |
 | `handnote/capture.py` | 笔画 JSON 校验、光栅化、`build_capture_font` |
 | `handnote/fonts.py` | 字体缓存目录与下载 |
@@ -46,7 +46,7 @@ ruff check handnote tests
 2. **渲染确定性**。同一 `seed` 必须逐字节一致（`tests/test_render.py::test_deterministic_for_same_seed`）。不要在渲染路径里引入 `random` 之外的时间/哈希随机源。
 3. **字形套的随机源**。变形参数只由 `(seed, 码位, 套号, strength)` 决定；正文选套用 `state.rng`，公式选套用 `(seed, tex)` 派生的 `random.Random`（公式图片在 layout 阶段就会生成并缓存）。`glyph_sets=1` 时不消耗 `state.rng`，公式路径与 `TextPath` 逐点一致（`tests/test_render.py::test_single_set_formula_matches_plain_textpath`）。
 4. **matplotlib rcParams 是全局状态**。`Renderer._apply_mathtext()` 在每次 `render()` 内调用，并用模块级 `_LOCK` 串行化。新增渲染入口时也必须拿锁。
-5. **字体合并只增不改**。`merge_fonts` 跳过基础字体已有的码位，冲突时保留原字形；不要改成覆盖，否则会破坏汉字。
+5. **字体合并默认只增不改**。`merge_fonts` 默认跳过基础字体已有的码位。`replace=True` 只重映射 overlay 自带的码位（模板里没有汉字），并且只改 cmap、不删旧字形；不要扩大到 overlay 之外的码位，否则会破坏汉字（`tests/test_replace.py::test_replace_remaps_only_written_chars`）。
 6. **缺字是静默的**。mathtext 缺字形会回退 STIX 而不报错，唯一可靠信号是 `coverage.analyze()`；渲染后把 `renderer.warnings` 透传给调用方。
 7. **数字格式稳定**。`spec.json` 的 `cells[].index` 与 `capture.json` 的 `index` 是同一套编号，改动需同步迁移脚本。`set` 是独立维度，同一 `index` 每套一条；扫描件按自然文件名排序后每 `spec.pages` 页为一套。
 8. **变体靠 GSUB 识别**。合并后字形名不可靠，渲染器只从 `rand` 读手写变体。`add_alternates` 只能追加，不得改动已有 lookup；改动后跑 `tests/test_sets.py::test_add_alternates_keeps_existing_features`。
@@ -67,4 +67,4 @@ ruff check handnote tests
 
 ## 已知限制
 
-见 `TODO.md`。影响面最大的三个：基础字体自带字符只有合成多套、扫描件无透视校正、公式不支持 `cases/aligned`。
+见 `TODO.md`。影响面最大的三个：汉字只有合成多套、扫描件无透视校正、公式不支持 `cases/aligned`。
