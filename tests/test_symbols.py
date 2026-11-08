@@ -4,9 +4,16 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from handnote.symbols import (SYMBOL_GROUPS, Template, all_symbols, build_font,
-                              build_template, coverage_of, merge_fonts,
-                              simulate_scan)
+from handnote.symbols import (
+    SYMBOL_GROUPS,
+    Template,
+    all_symbols,
+    build_font,
+    build_template,
+    coverage_of,
+    merge_fonts,
+    simulate_scan,
+)
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +76,7 @@ def test_built_glyph_has_ink(template, dejavu_path, tmp_path):
                           [tmp_path / f"scan-{i}.jpg" for i in range(len(pages))],
                           jitter_px=0.0)
     build_font(scans, spec, tmp_path / "symbols.ttf")
-    from PIL import ImageFont, ImageDraw
+    from PIL import ImageDraw, ImageFont
 
     font = ImageFont.truetype(str(tmp_path / "symbols.ttf"), 160)
     canvas = Image.new("L", (200, 200), 255)

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import cv2
 import numpy as np
@@ -113,7 +113,7 @@ class Template:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Template":
+    def from_dict(cls, data: dict) -> Template:
         cells = [
             Cell(c["index"], c["page"], c["row"], c["col"], c["char"],
                  tuple(c["bbox"]))
@@ -207,7 +207,6 @@ def build_template(
         cells.append(Cell(index, page, row, col, ch, (x0, y0, x0 + cell_px, y0 + cell_px)))
 
     guide_size = int(cell_px * 0.72)
-    label_size = max(9, int(cell_px * 0.075))
     head_size = max(12, int(5.2 * px_per_mm))
     small_size = max(9, int(3.2 * px_per_mm))
     line_w = max(1, dpi // 150)
@@ -311,7 +310,7 @@ def _cell_glyph(crop: np.ndarray, upem: int, threshold: int) -> tuple[TTGlyphPen
         return None
     h, w = crop.shape
     scale = upem / float(max(h, w))
-    cx, cy = w / 2.0, h / 2.0
+    cx = w / 2.0
     polys: list[tuple[np.ndarray, bool]] = []
     for i, contour in enumerate(contours):
         if len(contour) < 3:

@@ -20,8 +20,7 @@ from ..config import RenderConfig
 from ..fonts import list_fonts, resolve_font
 from ..markdown import ParseError, parse
 from ..render import Renderer
-from ..symbols import (SYMBOL_GROUPS, Template, all_symbols, build_font,
-                       build_template, merge_fonts)
+from ..symbols import SYMBOL_GROUPS, Template, all_symbols, build_font, build_template, merge_fonts
 
 WEBUI_DIR = Path(__file__).parent
 UPLOAD_DIR = Path.cwd() / "var" / "uploads"
@@ -298,7 +297,8 @@ class Handler(BaseHTTPRequestHandler):
             text = part.data.decode("utf-8", errors="replace")
             return self._json({"text": text, "filename": part.filename})
         suffix = Path(part.filename or "upload.bin").suffix.lower()
-        allowed = {".ttf", ".otf", ".ttc"} if kind == "font" else {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".json", ".pdf"}
+        allowed = ({".ttf", ".otf", ".ttc"} if kind == "font"
+                   else {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".json", ".pdf"})
         if suffix not in allowed:
             return self._error(f"unsupported file type {suffix}")
         name = f"{uuid.uuid4().hex[:12]}{suffix}"
@@ -323,7 +323,8 @@ class Handler(BaseHTTPRequestHandler):
                     for tok in re.split(r"(\d+)", name)]
 
         for i, part in enumerate(sorted(scans, key=natural)):
-            target = UPLOAD_DIR / f"scan-{uuid.uuid4().hex[:8]}-{i}{Path(part.filename or '.png').suffix}"
+            suffix = Path(part.filename or ".png").suffix
+            target = UPLOAD_DIR / f"scan-{uuid.uuid4().hex[:8]}-{i}{suffix}"
             target.write_bytes(part.data)
             paths.append(target)
         spec = Template.from_dict(json.loads(spec_text))

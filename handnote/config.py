@@ -76,7 +76,7 @@ class RenderConfig:
 
     # -- construction -----------------------------------------------------
     @classmethod
-    def from_mapping(cls, data: dict[str, Any] | None) -> "RenderConfig":
+    def from_mapping(cls, data: dict[str, Any] | None) -> RenderConfig:
         """Build a config from a partial dict, ignoring unknown keys."""
         cfg = cls()
         if not data:
@@ -89,13 +89,13 @@ class RenderConfig:
         cfg.validate()
         return cfg
 
-    def replace(self, **changes: Any) -> "RenderConfig":
+    def replace(self, **changes: Any) -> RenderConfig:
         """Return a copy with ``changes`` applied and validated."""
         data = {f.name: getattr(self, f.name) for f in fields(self)}
         data.update(changes)
         return RenderConfig(**data)
 
-    def validate(self) -> "RenderConfig":
+    def validate(self) -> RenderConfig:
         """Clamp numeric fields and check colour/alpha consistency."""
         for name, (low, high) in _LIMITS.items():
             value = getattr(self, name)

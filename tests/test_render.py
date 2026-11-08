@@ -1,4 +1,3 @@
-import pytest
 
 from handnote.markdown import parse
 from handnote.render import Renderer, render_markdown

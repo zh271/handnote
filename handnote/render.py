@@ -12,9 +12,9 @@ import logging
 import math
 import random
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import matplotlib
 
@@ -274,7 +274,8 @@ class Renderer:
                 continue
             need = line["h"]
             nxt = lines[i + 1] if i + 1 < len(lines) else None
-            if nxt and line["kind"] in ("p", "bullet", "num") and nxt["kind"] in ("display", "matrix"):
+            if (nxt and line["kind"] in ("p", "bullet", "num")
+                    and nxt["kind"] in ("display", "matrix")):
                 need += nxt["h"]
             if nxt and line["kind"] in ("h1", "h2", "h3"):
                 need += min(nxt["h"], 46)

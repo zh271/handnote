@@ -48,7 +48,7 @@ def cache_dir() -> Path:
 def list_fonts(extra_dirs: list[Path] | None = None) -> list[dict[str, str]]:
     """Return known fonts as ``[{"name", "path", "source"}]``."""
     found: dict[str, dict[str, str]] = {}
-    for key, (name, _url) in SOURCES.items():
+    for name, _url in SOURCES.values():
         path = CACHE_DIR / name
         if path.is_file():
             found[name] = {"name": name, "path": str(path), "source": "cache"}

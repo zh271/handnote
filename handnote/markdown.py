@@ -9,9 +9,10 @@ blocks (rendered as plain text).
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET_RE = re.compile(r"^[-*+]\s+(.*)$")
@@ -140,7 +141,8 @@ def _is_special(line: str) -> bool:
 def _join_lines(lines: Iterable[str]) -> str:
     out = ""
     for line in lines:
-        if out and out[-1].isascii() and out[-1].isalnum() and line[0].isascii() and line[0].isalnum():
+        if (out and out[-1].isascii() and out[-1].isalnum()
+                and line[0].isascii() and line[0].isalnum()):
             out += " "
         out += line
     return out
@@ -160,7 +162,7 @@ def _read_display_math(lines: list[str], i: int) -> tuple[str, int]:
             return "\n".join(body).strip(), i + 1
         body.append(line)
         i += 1
-    raise ParseError("unterminated $$ math block starting at line %d" % (i - len(body)))
+    raise ParseError(f"unterminated $$ math block ending near line {i - len(body) + 1}")
 
 
 def _display_blocks(math: str) -> list[Block]:

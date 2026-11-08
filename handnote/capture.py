@@ -13,8 +13,9 @@ the top-left corner, ``v`` pointing down. Each cell is rasterised at
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -33,7 +34,10 @@ class CaptureError(ValueError):
     """Raised when a capture payload is malformed."""
 
 
-def normalize(data: dict[str, Any]) -> dict[int, list[tuple[list[tuple[float, float, float]], float]]]:
+Stroke = tuple[list[tuple[float, float, float]], float]
+
+
+def normalize(data: dict[str, Any]) -> dict[int, list[Stroke]]:
     """Validate a payload and group strokes by cell index.
 
     Returns ``{cell_index: [(points, width), ...]}`` with points as

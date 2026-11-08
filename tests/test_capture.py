@@ -3,8 +3,13 @@ import json
 import numpy as np
 import pytest
 
-from handnote.capture import (CaptureError, build_capture_font, capture_crops,
-                              normalize, rasterize_strokes)
+from handnote.capture import (
+    CaptureError,
+    build_capture_font,
+    capture_crops,
+    normalize,
+    rasterize_strokes,
+)
 from handnote.symbols import build_template, coverage_of, merge_fonts
 
 
@@ -94,7 +99,7 @@ def test_capture_merges_into_base_font(spec, font_path, tmp_path):
         {"index": by_char["∈"], "strokes": [[[0.1, 0.4], [0.9, 0.6]]]},
         {"index": by_char["⊆"], "strokes": [[[0.5, 0.1], [0.5, 0.9]]]},
     ]}
-    report = build_capture_font(data, spec, tmp_path / "capture.ttf")
+    build_capture_font(data, spec, tmp_path / "capture.ttf")
     merged = merge_fonts(font_path, tmp_path / "capture.ttf", tmp_path / "merged.ttf")
     assert merged["added"] == 2
     assert coverage_of(tmp_path / "merged.ttf", "∈⊆")["missing"] == []

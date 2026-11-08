@@ -12,8 +12,14 @@ from .config import RenderConfig
 from .fonts import SOURCES, ensure_font, list_fonts, resolve_font
 from .markdown import parse
 from .render import Renderer
-from .symbols import (Template, build_font, build_template, merge_fonts,
-                      simulate_scan, write_template)
+from .symbols import (
+    Template,
+    build_font,
+    build_template,
+    merge_fonts,
+    simulate_scan,
+    write_template,
+)
 
 
 def _overrides(pairs: list[str]) -> dict:
@@ -124,7 +130,8 @@ def cmd_symbols_simulate(args: argparse.Namespace) -> int:
 
 def cmd_symbols_capture(args: argparse.Namespace) -> int:
     spec = Template.from_dict(json.loads(Path(args.spec).read_text(encoding="utf-8")))
-    raw_text = sys.stdin.read() if args.capture == "-" else Path(args.capture).read_text(encoding="utf-8")
+    raw_text = (sys.stdin.read() if args.capture == "-"
+                else Path(args.capture).read_text(encoding="utf-8"))
     data = json.loads(raw_text)
     if isinstance(data, dict) and "capture" in data:
         data = data["capture"]

@@ -1,7 +1,7 @@
 import json
 import threading
-import urllib.request
 import urllib.error
+import urllib.request
 from http.server import ThreadingHTTPServer
 
 import pytest
