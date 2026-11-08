@@ -165,7 +165,7 @@ python -m handnote symbols capture capture.json -m out/math-symbols.json \
 # 1. 生成 A4 模板（3 页，每格 24mm）和格子坐标 out/math-symbols.json
 python -m handnote symbols template -o out/math-symbols.pdf
 
-# 2. 打印，用黑色或深色笔照着浅灰字逐格写，整页平放扫描，按页序命名
+# 2. 打印，用黑色或深色笔照着浅灰字逐格写，扫描或用手机拍照
 # 3. 描摹并合并
 python -m handnote symbols build scan-1.png scan-2.png scan-3.png \
     -m out/math-symbols.json -o out/merged.ttf \
@@ -173,7 +173,9 @@ python -m handnote symbols build scan-1.png scan-2.png scan-3.png \
 ```
 
 - 描红字是浅灰色，扫描阈值会把它滤掉，所以必须用深色笔。
-- 扫描件需要整页平放、不倾斜；目前没有透视校正，歪得厉害的页会切错格。
+- 模板四角各有一个黑白方块（ArUco 定位标记）。构建时会找到它们，把倾斜、透视变形、上下颠倒、分辨率不同的扫描件或照片拉正，并按标记识别是哪一套的第几页，所以文件名和上传顺序都无所谓。
+- 拍照时四个角的标记要完整入镜，至少两个能看清；光线均匀、不要有强烈阴影。
+- 找不到标记的图片（比如用旧模板打印的）按文件名自然排序补到空缺的页上，不做校正，这时需要平放扫描。
 - 不加 `--merge` 只生成符号字体；不加 `--replace` 只补基础字体缺的字，已有的数字字母保持原样。
 - `--keep` 与网页上的“保留书写误差”相同。
 
@@ -301,7 +303,7 @@ mathtext 解析失败，通常是用了不支持的命令（`\le`、`\iff`、`ca
 
 - 输出是位图（PNG，或由位图组成的 PDF），不是可编辑文字；放大后有锯齿。
 - 手写多套只覆盖写过的字符；汉字只有合成的多套。
-- 扫描件没有透视校正，必须平整。
+- 透视校正只处理平面变形；纸张弯曲、褶皱无法拉平。
 - 公式不支持 `cases`、`aligned`、`array` 等环境。
 - Word 里的公式（OMML）不经过 handnote，无法带上手写抖动。
 

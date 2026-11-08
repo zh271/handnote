@@ -269,6 +269,7 @@ function bindSymbols() {
       const data = await api("/api/symbols/build", { method: "POST", body: form });
       box.innerHTML = `构建完成：<b>${data.glyphs}</b> 个字形` +
         (data.sets > 1 ? `，最多 <b>${data.sets}</b> 套` : "") +
+        (data.warped_pages ? `，${data.warped_pages} 页已按定位标记校正` : "") +
         (data.missing.length ? `，缺 ${data.missing.length} 个（${escapeHtml(data.missing.join(" "))}）` : "") +
         ` · <a href="${data.url}" download>下载 TTF</a>`;
       const option = document.createElement("option");

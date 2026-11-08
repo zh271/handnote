@@ -19,6 +19,9 @@
   "page_size_px": [2480, 3508],
   "origin_px": [293, 318],
   "guide_missing": [],
+  "markers": [
+    {"id": 0, "sheet": 0, "corner": 0, "points": [[77, 77], [183, 77], [183, 183], [77, 183]]}
+  ],
   "cells": [
     {"index": 0, "page": 0, "row": 0, "col": 0,
      "char": "A", "code": 65, "bbox": [293, 318, 576, 601]}
@@ -35,6 +38,7 @@
 | `page_size_px` | 整页像素尺寸，A4 在 300dpi 下为 2480×3508 |
 | `origin_px` | 网格左上角，`[x, y]` |
 | `guide_missing` | 描红字体缺的字符；非空说明模板里有空格子 |
+| `markers` | 每张打印页四角的 ArUco 标记（`DICT_4X4_1000`）。`sheet` 为打印页序号（按套优先：第 k 套第 p 页 = `k × pages + p`），`corner` 0–3 依次为左上、右上、右下、左下，`id = sheet × 4 + corner`，`points` 为标记四角像素坐标（顺时针，从左上起）。旧 spec 没有此字段，构建时按文件名顺序且不做校正 |
 | `cells[].bbox` | 该格的绝对像素包围盒 `[x0, y0, x1, y1]` |
 | `cells[].index` | 全局序号，采集与构建都靠它对位 |
 

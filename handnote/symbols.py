@@ -12,7 +12,7 @@ import json
 import math
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -48,6 +48,13 @@ GUIDE_RGB = (200, 200, 200)
 GRID_RGB = (230, 225, 225)
 LABEL_RGB = (236, 236, 236)
 HEAD_RGB = (90, 90, 90)
+
+#: ArUco dictionary for the page-corner markers. Marker id encodes
+#: ``sheet * 4 + corner`` (corner: 0 TL, 1 TR, 2 BR, 3 BL), where ``sheet`` is
+#: the printed page index, set-major, so scans can be ordered automatically.
+MARKER_DICT = cv2.aruco.DICT_4X4_1000
+MARKER_MM = 9.0
+MARKER_INSET_MM = 6.5
 
 
 def all_symbols() -> str:
@@ -91,6 +98,9 @@ class Template:
     pages: int
     guide_missing: list[str]
     sets: int = 1
+    #: ``{"id", "sheet", "corner", "points"}`` per printed marker; empty for
+    #: templates made before perspective correction.
+    markers: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -105,6 +115,7 @@ class Template:
             "page_size_px": list(self.page_size),
             "origin_px": list(self.origin),
             "guide_missing": self.guide_missing,
+            "markers": self.markers,
             "cells": [
                 {
                     "index": c.index,
@@ -137,6 +148,7 @@ class Template:
             pages=int(data["pages"]),
             guide_missing=list(data.get("guide_missing", [])),
             sets=int(data.get("sets", 1) or 1),
+            markers=list(data.get("markers", [])),
         )
 
 
@@ -238,8 +250,11 @@ def build_template(
     small_font_obj = load(head_font, small_size) if head_font else None
 
     pages: list[Image.Image] = []
+    markers: list[dict] = []
     for set_no, page in ((k, pg) for k in range(sets) for pg in range(pages_total)):
         img = Image.new("RGB", (page_w, page_h), (255, 255, 255))
+        sheet = set_no * pages_total + page
+        markers += _draw_markers(img, sheet, px_per_mm)
         draw = ImageDraw.Draw(img)
         first = page * per_page + 1
         last = min(len(text), (page + 1) * per_page)
@@ -267,8 +282,67 @@ def build_template(
         pages.append(img)
 
     template = Template(cells, (page_w, page_h), (left, top), cell_px,
-                        cols, rows, dpi, pages_total, missing, sets)
+                        cols, rows, dpi, pages_total, missing, sets, markers)
     return pages, template
+
+
+def _draw_markers(img: Image.Image, sheet: int, px_per_mm: float) -> list[dict]:
+    """Paste the four corner markers of one printed page; returns their geometry."""
+    side = int(round(MARKER_MM * px_per_mm))
+    inset = int(round(MARKER_INSET_MM * px_per_mm))
+    w, h = img.size
+    origins = [(inset, inset), (w - inset - side, inset),
+               (w - inset - side, h - inset - side), (inset, h - inset - side)]
+    dictionary = cv2.aruco.getPredefinedDictionary(MARKER_DICT)
+    out = []
+    for corner, (x, y) in enumerate(origins):
+        marker_id = sheet * 4 + corner
+        tile = cv2.aruco.generateImageMarker(dictionary, marker_id, side, borderBits=1)
+        img.paste(Image.fromarray(tile).convert(img.mode), (x, y))
+        out.append({"id": marker_id, "sheet": sheet, "corner": corner,
+                    "points": [[x, y], [x + side, y], [x + side, y + side], [x, y + side]]})
+    return out
+
+
+def register_page(gray: np.ndarray, spec: Template) -> tuple[int | None, np.ndarray, bool]:
+    """Find the corner markers on a scan and warp it onto the template grid.
+
+    Returns ``(sheet, image, warped)``. ``sheet`` is the printed page index
+    the markers identify (``None`` if none were found). With two or more
+    markers the scan is perspective-corrected to ``spec.page_size``;
+    otherwise the image is returned unchanged.
+    """
+    if not spec.markers:
+        return None, gray, False
+    known = {m["id"]: m for m in spec.markers}
+    # Detect on a reduced copy: markers are ~100px at 300dpi, plenty at 1/2.
+    scale = min(1.0, 1800.0 / max(gray.shape))
+    small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) \
+        if scale < 1.0 else gray
+    detector = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(MARKER_DICT),
+                                       cv2.aruco.DetectorParameters())
+    corners, ids, _ = detector.detectMarkers(small)
+    if ids is None:
+        return None, gray, False
+    by_sheet: dict[int, list[tuple[np.ndarray, list]]] = {}
+    for quad, marker_id in zip(corners, ids.ravel(), strict=True):
+        marker = known.get(int(marker_id))
+        if marker is not None:
+            by_sheet.setdefault(marker["sheet"], []).append(
+                (quad.reshape(4, 2) / scale, marker["points"]))
+    if not by_sheet:
+        return None, gray, False
+    sheet, found = max(by_sheet.items(), key=lambda kv: len(kv[1]))
+    if len(found) < 2:
+        return sheet, gray, False
+    src = np.concatenate([quad for quad, _ in found]).astype(np.float32)
+    dst = np.array([pt for _, pts in found for pt in pts], dtype=np.float32)
+    matrix, _ = cv2.findHomography(src, dst, cv2.RANSAC, 4.0)
+    if matrix is None:
+        return sheet, gray, False
+    warped = cv2.warpPerspective(gray, matrix, tuple(spec.page_size),
+                                 flags=cv2.INTER_LINEAR, borderValue=255)
+    return sheet, warped, True
 
 
 def write_template(out_pdf: str | Path, out_json: str | Path | None = None, **kwargs) -> Template:
@@ -438,34 +512,61 @@ def natural_key(path: str | Path) -> list:
     return [int(tok) if tok.isdigit() else tok for tok in re.split(r"(\d+)", name)]
 
 
-def _crops_from_scans(scans: Sequence[str | Path], spec: Template,
-                      first_page: int = 0) -> dict[int, np.ndarray]:
-    """Crop every template cell out of the scanned pages of one set."""
-    pages = list(scans)
-    images: dict[int, Image.Image] = {}
-    try:
-        for idx, path in enumerate(pages[first_page:first_page + spec.pages]):
-            images[idx] = Image.open(path).convert("L")
-        crops: dict[int, np.ndarray] = {}
-        for cell in spec.cells:
-            page = images.get(cell.page)
-            if page is None:
-                continue
-            x0, y0, x1, y1 = cell.bbox
-            if x1 > page.width or y1 > page.height:
-                continue
-            crops[cell.index] = np.asarray(page.crop((x0, y0, x1, y1)))
-        return crops
-    finally:
-        for image in images.values():
-            image.close()
+def load_sheets(scans: Sequence[str | Path], spec: Template) -> tuple[dict[int, np.ndarray], int]:
+    """Read scans and place each on its printed page; returns ``(sheets, warped)``.
+
+    Pages whose corner markers are found go to the sheet the markers name,
+    perspective-corrected. The rest fill the remaining sheets in natural
+    filename order, as before markers existed.
+    """
+    sheets: dict[int, np.ndarray] = {}
+    unplaced: list[np.ndarray] = []
+    warped = 0
+    for path in sorted((Path(p) for p in scans), key=natural_key):
+        with Image.open(path) as image:
+            gray = np.asarray(image.convert("L"))
+        sheet, fixed, did_warp = register_page(gray, spec)
+        warped += did_warp
+        if sheet is not None and sheet not in sheets:
+            sheets[sheet] = fixed
+        else:
+            unplaced.append(fixed)
+    slot = 0
+    for page in unplaced:
+        while slot in sheets:
+            slot += 1
+        sheets[slot] = page
+    return sheets, warped
 
 
-def scan_sets(scans: Sequence[str | Path], spec: Template) -> list[dict[int, np.ndarray]]:
-    """Group scans into handwritten sets: every ``spec.pages`` pages is one set."""
-    pages = sorted((Path(p) for p in scans), key=natural_key)
-    count = min(MAX_SETS, max(1, math.ceil(len(pages) / max(1, spec.pages))))
-    return [_crops_from_scans(pages, spec, k * spec.pages) for k in range(count)]
+def _crops_from_sheets(sheets: dict[int, np.ndarray], spec: Template,
+                       first_sheet: int = 0) -> dict[int, np.ndarray]:
+    """Crop every template cell out of the pages of one set."""
+    crops: dict[int, np.ndarray] = {}
+    for cell in spec.cells:
+        page = sheets.get(first_sheet + cell.page)
+        if page is None:
+            continue
+        x0, y0, x1, y1 = cell.bbox
+        if x1 > page.shape[1] or y1 > page.shape[0]:
+            continue
+        crops[cell.index] = np.ascontiguousarray(page[y0:y1, x0:x1])
+    return crops
+
+
+def scan_sets(scans: Sequence[str | Path], spec: Template,
+              info: dict | None = None) -> list[dict[int, np.ndarray]]:
+    """Group scans into handwritten sets: every ``spec.pages`` sheets is one set.
+
+    ``info``, if given, receives ``warped_pages`` (how many scans were
+    perspective-corrected from their markers).
+    """
+    sheets, warped = load_sheets(scans, spec)
+    if info is not None:
+        info["warped_pages"] = warped
+    per_set = max(1, spec.pages)
+    count = min(MAX_SETS, max(1, math.ceil((max(sheets, default=0) + 1) / per_set)))
+    return [_crops_from_sheets(sheets, spec, k * per_set) for k in range(count)]
 
 
 def assemble_font(
@@ -569,10 +670,12 @@ def build_font(
     form one handwritten set.
     """
     spec = template if isinstance(template, Template) else Template.from_dict(template)
-    sets = scan_sets(scans, spec)
+    info: dict = {}
+    sets = scan_sets(scans, spec, info)
     report = assemble_font(sets[0], spec, out_path, threshold=threshold, upem=upem,
                            family=family, extra_sets=sets[1:], keep=keep)
     report["scanned_sets"] = len(sets)
+    report["warped_pages"] = info["warped_pages"]
     return report
 
 

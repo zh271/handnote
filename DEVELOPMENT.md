@@ -80,6 +80,7 @@ symbols template ──▶ PDF + spec.json
                      合并后的 TTF
 ```
 
+- 扫描件先经 `register_page`：检测四角 ArUco 标记（id = 页号 × 4 + 角号），用单应矩阵拉正到模板像素坐标，并按标记确定页号；没有标记时按文件名顺序。
 - 扫描件和浏览器笔画最终都变成同样的格子位图，走同一个描摹器。
 - 格子几何（缩放、基线）在两条输入之间共享。改动会同时影响扫描件、浏览器笔画和已有字体，见 CLAUDE.md 不变量 1。
 - 对齐：每格的手写墨迹框向描红字的墨迹框和基线靠拢，`keep` 控制保留多少原始偏差（`symbols.guide_box`、`_cell_glyph`）。
@@ -176,4 +177,4 @@ python -m pytest tests/test_answer_skill.py -q
 | 合成多套、手写多套（`rand` / `calt`） | 完成 | `tests/test_variants.py`、`tests/test_sets.py` |
 | 答题 skill 白名单可渲染 | 完成 | `tests/test_answer_skill.py` |
 | Web 界面与 API | 完成 | `tests/test_webui.py` |
-| 扫描件透视校正 | 计划中 | TODO.md |
+| 扫描件透视校正、自动页序 | 完成 | `tests/test_perspective.py` |
