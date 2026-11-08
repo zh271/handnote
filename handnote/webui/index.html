@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>handnote · 手写笔记渲染器</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">handnote<span>手写笔记渲染器</span></div>
+  <div class="bar-actions">
+    <label class="field inline">
+      <span>字体</span>
+      <select id="font-select"></select>
+    </label>
+    <label class="btn ghost" for="font-upload">导入字体</label>
+    <input id="font-upload" type="file" accept=".ttf,.otf,.ttc" hidden>
+    <button id="render-btn" class="btn primary">渲染</button>
+    <span id="status" class="status">就绪</span>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="panel">
+    <nav class="tabs">
+      <button class="tab active" data-tab="content">内容</button>
+      <button class="tab" data-tab="params">参数</button>
+      <button class="tab" data-tab="symbols">符号页</button>
+    </nav>
+
+    <div class="tab-body" id="tab-content">
+      <div class="toolbar">
+        <label class="btn ghost" for="md-upload">导入 .md</label>
+        <input id="md-upload" type="file" accept=".md,.markdown,.txt" hidden>
+        <button class="btn ghost" id="sample-btn">载入示例</button>
+        <button class="btn ghost" id="clear-btn">清空</button>
+      </div>
+      <textarea id="markdown" spellcheck="false" placeholder="# 标题&#10;&#10;正文支持 $行内公式$ 与 $$块级公式$$"></textarea>
+      <div class="hint">
+        <span>支持 # 标题、- 列表、1. 编号、$$..$$、$..$、\begin{bmatrix}、--- 分页</span>
+      </div>
+      <div id="coverage" class="coverage"></div>
+    </div>
+
+    <div class="tab-body hidden" id="tab-params">
+      <div class="controls" id="controls">
+        <label class="field"><span>正文尺寸 <b data-out="body_size"></b></span>
+          <input type="range" id="body_size" min="14" max="60" step="1"></label>
+        <label class="field"><span>行距 <b data-out="line_height"></b></span>
+          <input type="range" id="line_height" min="1.2" max="2.6" step="0.02"></label>
+        <label class="field"><span>公式尺寸 <b data-out="display_size"></b></span>
+          <input type="range" id="display_size" min="20" max="64" step="1"></label>
+        <label class="field"><span>行内公式比例 <b data-out="math_scale"></b></span>
+          <input type="range" id="math_scale" min="0.8" max="1.6" step="0.02"></label>
+        <label class="field"><span>倾斜抖动 (°) <b data-out="jitter_rot"></b></span>
+          <input type="range" id="jitter_rot" min="0" max="4" step="0.05"></label>
+        <label class="field"><span>水平抖动 <b data-out="jitter_dx"></b></span>
+          <input type="range" id="jitter_dx" min="0" max="0.12" step="0.005"></label>
+        <label class="field"><span>垂直抖动 <b data-out="jitter_dy"></b></span>
+          <input type="range" id="jitter_dy" min="0" max="0.12" step="0.005"></label>
+        <label class="field"><span>墨色最浅 <b data-out="ink_alpha_min"></b></span>
+          <input type="range" id="ink_alpha_min" min="150" max="255" step="1"></label>
+        <label class="field"><span>纸张噪声 <b data-out="paper_noise"></b></span>
+          <input type="range" id="paper_noise" min="0" max="10" step="0.1"></label>
+        <label class="field"><span>随机种子</span>
+          <input type="number" id="seed" min="0" max="99999" step="1"></label>
+        <label class="check"><input type="checkbox" id="page_numbers"> 显示页码</label>
+        <label class="check"><input type="checkbox" id="paper"> 纸张底色</label>
+        <button class="btn ghost" id="reset-btn">恢复默认</button>
+      </div>
+    </div>
+
+    <div class="tab-body hidden" id="tab-symbols">
+      <p class="note">生成可打印的田字格模板：每格一个浅灰字符，用黑笔描写后扫描，再构建成字体。</p>
+      <div class="grid2">
+        <label class="field"><span>格子 (mm)</span><input type="number" id="sym-cell" value="24" min="12" max="40" step="1"></label>
+        <label class="field"><span>列 × 行</span>
+          <div class="row"><input type="number" id="sym-cols" value="7" min="2" max="12">
+          <input type="number" id="sym-rows" value="10" min="2" max="14"></div></label>
+        <label class="field"><span>DPI</span><input type="number" id="sym-dpi" value="300" min="150" max="600" step="50"></label>
+      </div>
+      <div class="row gap">
+        <button class="btn primary" id="sym-pdf">下载模板 PDF</button>
+        <button class="btn ghost" id="sym-json">下载 spec.json</button>
+      </div>
+      <hr>
+      <p class="note">已有扫描件？上传扫描图（按页顺序）和 spec.json，直接构建字体。</p>
+      <label class="field"><span>扫描图</span><input type="file" id="sym-scans" accept="image/*" multiple></label>
+      <label class="field"><span>spec.json</span><input type="file" id="sym-spec" accept=".json"></label>
+      <label class="check"><input type="checkbox" id="sym-merge" checked> 合并到当前字体（保留中文）</label>
+      <button class="btn primary" id="sym-build">构建字体</button>
+      <div id="sym-result" class="coverage"></div>
+    </div>
+  </section>
+
+  <section class="preview-wrap">
+    <div class="preview-bar">
+      <span id="page-info">尚未渲染</span>
+      <a id="download-pdf" class="btn ghost disabled" href="#" download>下载 PDF</a>
+    </div>
+    <div id="preview" class="preview"></div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
