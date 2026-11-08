@@ -9,7 +9,8 @@ from pathlib import Path
 
 CACHE_DIR = Path(os.environ.get("HANDNOTE_CACHE") or Path.home() / ".cache" / "handnote") / "fonts"
 
-#: key -> (file name, download URL). All fonts are redistributable.
+#: key -> (file name, download URL). All are SIL OFL 1.1 except xkcd (CC BY-NC 3.0);
+#: see CREDITS.md.
 SOURCES: dict[str, tuple[str, str]] = {
     "zhimang": (
         "ZhiMangXing-Regular.ttf",

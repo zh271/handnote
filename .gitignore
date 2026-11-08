@@ -9,6 +9,4 @@ build/
 dist/
 .pytest_cache/
 .ruff_cache/
-.clawbench/generated/
 *.bak
-.clawbench/

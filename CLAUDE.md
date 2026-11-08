@@ -1,6 +1,6 @@
 # handnote — development notes
 
-给接手开发的 agent 或人看的工程说明。用户文档在 `README.md`，数据格式在 `docs/formats.md`。
+给接手开发的 agent 或人看的工程说明。用户文档在 `README.md`，面向人的开发说明在 `DEVELOPMENT.md`，数据格式在 `docs/formats.md`，第三方许可在 `CREDITS.md`。
 
 ## 项目是什么
 
@@ -39,6 +39,7 @@ ruff check handnote tests
 | `handnote/cli.py` | 命令行入口 |
 | `handnote/webui/server.py` | stdlib HTTP 服务与 JSON API |
 | `handnote/webui/*.html/js/css` | 渲染器界面 + 采集页（原生 JS，无构建步骤） |
+| `skills/concise-answer/SKILL.md` | 答题 agent skill；公式白名单由 `tests/test_answer_skill.py` 逐条渲染校验 |
 
 ## 不变量（改代码前先读）
 
