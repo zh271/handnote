@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "handnote"
+version = "0.1.0"
+description = "Render Markdown notes with a handwriting font, per-glyph jitter and hand-drawn math."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "pillow>=10",
+  "numpy>=1.26",
+  "matplotlib>=3.8",
+  "fonttools>=4.50",
+  "opencv-python-headless>=4.9",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+handnote = "handnote.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["handnote*"]
+
+[tool.setuptools.package-data]
+handnote = ["webui/*.html", "webui/*.js", "webui/*.css"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
