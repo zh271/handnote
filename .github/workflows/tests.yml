@@ -24,7 +24,17 @@ jobs:
         run: pip install -e ".[test]" ruff
       - name: Lint
         run: ruff check handnote tests
+      - name: Cache fonts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/handnote/fonts
+          key: handnote-fonts-zhimang-v1
       - name: Fetch handwriting font
-        run: python -m handnote fonts fetch zhimang
+        run: |
+          for i in 1 2 3 4 5; do
+            python -m handnote fonts fetch zhimang && exit 0
+            echo "download failed, retry $i"; sleep $((i * 10))
+          done
+          exit 1
       - name: Test
         run: python -m pytest -q
