@@ -1,18 +1,44 @@
 # handnote
 
+[![tests](https://github.com/zh271/handnote/actions/workflows/tests.yml/badge.svg)](https://github.com/zh271/handnote/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.11%2B-3776ab.svg)](pyproject.toml)
+
 把 Markdown 排成手写页面：逐字抖动、手绘矩阵、mathtext 公式，输出 PNG 或 PDF；附带一个本地 Web UI 调参和实时预览。
+
+另有一条补字链路：打印符号模板 → 手写（纸笔扫描或浏览器采集）→ 描摹成 TTF → 合并进中文字体，补掉 mathtext 静默回退的数学符号。
 
 ## 快速开始
 
 ```bash
+git clone https://github.com/zh271/handnote.git
+cd handnote
 python -m venv .venv && . .venv/bin/activate
-pip install -e .
+pip install -e ".[test]"
 
 python -m handnote render notes.md -o out/notes.pdf   # 默认字体为字迹体
 python -m handnote serve                              # http://127.0.0.1:8765/
 ```
 
 首次运行会从 Google Fonts 下载 ZhiMangXing（OFL）到 `~/.cache/handnote/fonts/`。也可以 `--font /path/to/font.ttf` 指定任意字体。
+
+## 项目结构
+
+```
+handnote/
+  config.py     RenderConfig：全部参数、钳制与校验
+  markdown.py   Markdown 子集 -> Block
+  coverage.py   LaTeX -> Unicode，缺字报告
+  render.py     layout -> paginate -> render_page
+  symbols.py    模板、描摹、assemble_font、merge_fonts
+  capture.py    笔画 JSON、光栅化、build_capture_font
+  fonts.py      字体缓存与下载
+  cli.py        命令行
+  webui/        stdlib HTTP 服务、渲染界面、采集页
+examples/       三份可直接渲染的示例
+docs/formats.md spec / capture / 构建报告的字段定义
+CLAUDE.md       给接手开发的 agent 的工程约定
+```
 
 ## 输入语法
 
@@ -124,6 +150,14 @@ python -m pytest -q
 - 一个字只有一个字形，重复字仍完全一致；变体方案见 TODO。
 - 扫描件需整页平放、无透视；倾斜过大的页面会切格错位。
 
+## 文档
+
+| 文件 | 内容 |
+|---|---|
+| `docs/formats.md` | spec.json、capture.json、构建报告的字段与几何约定 |
+| `CLAUDE.md` | 模块地图、不变量、测试与代码风格约定 |
+| `MILESTONES.md` / `TODO.md` | 进度与待办 |
+
 ## 状态
 
 | 能力 | 状态 | 证据 |
@@ -136,3 +170,7 @@ python -m pytest -q
 | 本地 Web UI 与 API | [VERIFIED] | `tests/test_webui.py` |
 | 字形变体（OpenType `rand` / `calt`） | [PLANNED] | TODO.md |
 | 透视校正的扫描切格 | [PLANNED] | TODO.md |
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。仓库不包含字体二进制：ZhiMangXing、MaShanZheng、Noto Sans SC 采用 SIL Open Font License 1.1，首次运行时从 Google Fonts 下载到 `~/.cache/handnote/fonts/`；生成的字体只受你输入笔迹的版权约束。
