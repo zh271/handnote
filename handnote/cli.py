@@ -307,7 +307,11 @@ def cmd_docx(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     from .webui.server import serve
 
-    serve(host=args.host, port=args.port)
+    try:
+        serve(host=args.host, port=args.port, open_browser=args.open)
+    except OSError as exc:
+        print(f"无法启动 Web UI：{exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -440,7 +444,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     w = sub.add_parser("serve", help="start the local web UI")
     w.add_argument("--host", default="127.0.0.1")
-    w.add_argument("--port", type=int, default=8765)
+    w.add_argument("--port", type=int, default=8765,
+                   help="preferred port; the next free one is used if it is taken")
+    w.add_argument("--open", action="store_true", help="open the UI in the browser")
     w.set_defaults(func=cmd_serve)
     return parser
 

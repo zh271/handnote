@@ -1,0 +1,4 @@
+# cmd.exe misparses LF-only batch files that contain UTF-8 text (lines get split
+# mid-character), and GitHub's "Download ZIP" ships LF unless told otherwise.
+*.bat text eol=crlf
+*.cmd text eol=crlf

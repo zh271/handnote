@@ -49,6 +49,8 @@ ruff check handnote tests
 | `handnote/model/pressure.py` | 压感回归（numpy）与通用规则 |
 | `handnote/fonts.py` | 字体缓存目录与下载 |
 | `handnote/cli.py` | 命令行入口 |
+| `handnote/update.py` | `start.bat` 的 git 快进自更新；只用 stdlib（在装依赖前运行），失败一律跳过不阻塞启动 |
+| `start.bat` | Windows 启动脚本；含 UTF-8 中文，必须 CRLF（`.gitattributes`），LF 会被 cmd 拆行误执行 |
 | `handnote/webui/server.py` | stdlib HTTP 服务与 JSON API；`/api/hanzi/*` 转给 `webui/hanzi_api.py`，`/api/paper/*` 转给 `webui/paper_api.py` |
 | `handnote/webui/*.html/js/css` | 渲染器界面 + 符号采集页 + 汉字页（原生 JS，无构建步骤；`pad.js` / `pen.js` 共用） |
 | `skills/concise-answer/SKILL.md` | 答题 agent skill；公式白名单由 `tests/test_answer_skill.py` 逐条渲染校验 |

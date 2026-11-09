@@ -254,6 +254,43 @@ def test_template_json_with_sets(server):
     assert json.loads(body)["sets"] == 2
 
 
+def test_bind_falls_back_when_port_taken():
+    from handnote.webui.server import bind
+
+    blocker = bind("127.0.0.1", 0)
+    taken = blocker.server_address[1]
+    try:
+        for tries in (10, 1):  # next free port, then the OS-assigned fallback
+            httpd = bind("127.0.0.1", taken, tries=tries)
+            try:
+                assert httpd.server_address[1] != taken
+            finally:
+                httpd.server_close()
+    finally:
+        blocker.server_close()
+
+
+def test_serve_opens_browser_on_bound_port(monkeypatch, capsys):
+    from handnote.webui import server as module
+
+    blocker = module.bind("127.0.0.1", 0)
+    taken = blocker.server_address[1]
+    opened = []
+    monkeypatch.setattr(module.webbrowser, "open", opened.append)
+
+    def stop(self):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(module._Server, "serve_forever", stop)
+    try:
+        module.serve("127.0.0.1", taken, open_browser=True)
+    finally:
+        blocker.server_close()
+    assert len(opened) == 1 and opened[0].startswith("http://127.0.0.1:")
+    assert opened[0] != f"http://127.0.0.1:{taken}/"
+    assert opened[0] in capsys.readouterr().out
+
+
 def test_paper_scan_api(server):
     import io
 
