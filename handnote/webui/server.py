@@ -22,7 +22,7 @@ from ..markdown import ParseError, parse
 from ..paper import presets as paper_presets
 from ..render import Renderer
 from ..symbols import SYMBOL_GROUPS, Template, all_symbols, build_font, build_template, merge_fonts
-from . import paper_api
+from . import hanzi_api, paper_api
 
 WEBUI_DIR = Path(__file__).parent
 UPLOAD_DIR = Path.cwd() / "var" / "uploads"
@@ -105,6 +105,11 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/capture", "/capture.html"):
                 return self._send(200, (WEBUI_DIR / "capture.html").read_bytes(),
                                   _MIME[".html"])
+            if path in ("/hanzi", "/hanzi.html"):
+                return self._send(200, (WEBUI_DIR / "hanzi.html").read_bytes(),
+                                  _MIME[".html"])
+            if path.startswith("/api/hanzi/") and hanzi_api.handle_get(self, path, query):
+                return None
             if path.startswith("/api/paper/") and paper_api.handle_get(self, path):
                 return None
             if path.startswith("/static/"):
@@ -239,6 +244,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._symbol_build()
             if path == "/api/symbols/capture":
                 return self._symbol_capture()
+            if path.startswith("/api/hanzi/") and hanzi_api.handle_post(self, path):
+                return None
             if path.startswith("/api/paper/") and paper_api.handle_post(self, path):
                 return None
             return self._error("not found", 404)

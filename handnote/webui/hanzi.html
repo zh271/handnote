@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>handnote · 手写汉字</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/hanzi.css">
+</head>
+<body class="hanzi-page">
+<header class="bar sticky">
+  <div class="bar-left">
+    <div class="brand">handnote</div>
+    <nav class="appnav" aria-label="切换页面">
+      <a href="/">① 渲染笔记</a>
+      <a href="/capture">② 手写符号</a>
+      <a href="/hanzi" class="active" aria-current="page">③ 手写汉字</a>
+    </nav>
+  </div>
+  <div class="bar-actions">
+    <label class="field inline"><span>当前套</span>
+      <select id="set" title="同一个字可以写几遍，每遍是一套字形"></select></label>
+    <label class="field inline"><span>笔宽 <b id="width-out">0.050</b></span>
+      <input id="width" type="range" min="0.025" max="0.09" step="0.005" value="0.05"></label>
+    <button id="undo" class="btn ghost" title="撤销上一笔（Ctrl+Z）">撤销</button>
+    <button id="export" class="btn ghost">导出 JSON</button>
+    <label class="btn ghost" title="导入之前导出的 JSON">导入<input id="import" type="file" accept=".json" hidden></label>
+    <span id="status" class="status"></span>
+  </div>
+</header>
+
+<main class="hz">
+  <section class="hz-panel hz-list">
+    <h2>要写的字</h2>
+    <div class="hz-cover">
+      <div class="meter"><span id="cover-bar"></span></div>
+      <div id="cover-text" class="muted">正在加载…</div>
+    </div>
+    <div class="seg" role="group" aria-label="字表">
+      <button type="button" data-list="next" class="active" title="常用字，覆盖左右、上下、包围等各种结构">推荐</button>
+      <button type="button" data-list="note" title="渲染器里当前笔记用到、还没写过的字">我的笔记</button>
+      <button type="button" data-list="done">已写</button>
+    </div>
+    <div id="chips" class="chips"></div>
+    <div class="hz-add">
+      <input id="add-chars" type="text" placeholder="输入要写的字，回车加入队列" spellcheck="false" autocomplete="off">
+    </div>
+    <p class="muted small">照着描红按笔顺写，像平时写字一样即可。写 60–100 个字后训练模型，
+      模型学会你的写法，再生成没写过的字。推荐列表是结构各不相同的常用字。</p>
+  </section>
+
+  <section class="hz-panel hz-write">
+    <div class="hz-head">
+      <span id="char" class="hz-char">·</span>
+      <span id="strokes" class="muted"></span>
+      <span id="check" class="hz-check"></span>
+    </div>
+    <div id="pad"></div>
+    <div class="hz-tools">
+      <button id="prev" class="btn ghost" title="上一个（←）">← 上一个</button>
+      <button id="clear" class="btn ghost" title="清空这个字（本套）">清空</button>
+      <label class="check inline"><input type="checkbox" id="show-guide" checked> 描红</label>
+      <label class="check inline"><input type="checkbox" id="show-order" checked> 笔顺号</label>
+      <label class="check inline"><input type="checkbox" id="auto-next" checked> 写完自动下一个</label>
+      <label class="field inline" title="笔宽随压力变化的幅度：0 为等宽，1 为默认，2 为明显的粗细变化。手写笔用真实压力">
+        <span>压感 <b id="pressure-out">1.0</b></span>
+        <input id="pressure" type="range" min="0" max="2" step="0.1" value="1"></label>
+      <label class="check inline" title="鼠标和手指没有压力数据：写得慢笔画粗，写得快笔画细">
+        <input type="checkbox" id="simulate" checked> 鼠标按速度模拟压感</label>
+      <button id="next" class="btn" title="下一个（→ 或 Enter）">下一个 →</button>
+    </div>
+    <div id="fetching" class="hz-fetch" hidden>
+      首次使用需要下载笔顺数据（makemeahanzi，约 33MB，用来画描红），只下载一次。
+      <button id="fetch" class="btn primary small">下载</button>
+    </div>
+  </section>
+
+  <section class="hz-panel hz-side">
+    <h2>模型生成</h2>
+    <div id="model-status" class="muted small">正在检查…</div>
+    <div id="model-install" class="hz-fetch small" hidden>
+      需要先安装模型依赖（PyTorch CPU 版，约 200MB），然后重启服务：
+      <pre>pip install -e ".[model]" --extra-index-url https://download.pytorch.org/whl/cpu</pre>
+    </div>
+    <div id="model-fetch-box" class="hz-fetch small" hidden>
+      下载 SDT 模型（约 270MB，只下载一次）。模型基于 CASIA 联机手写数据集训练，
+      该数据集仅限研究用途，生成的字体请个人使用。
+      <button id="model-fetch" class="btn primary small">下载模型</button>
+    </div>
+
+    <h3>1. 训练</h3>
+    <p class="muted small">用你写的字微调模型，约 10–20 分钟（CPU）。写的字有变化就要重新训练。</p>
+    <button id="train" class="btn primary">训练模型</button>
+    <div class="meter" id="train-meter" hidden><span id="train-bar"></span></div>
+    <div id="train-result" class="muted small"></div>
+
+    <h3>2. 生成并构建字体</h3>
+    <label class="field"><span>生成哪些字</span>
+      <select id="targets">
+        <option value="note">我的笔记里用到的字</option>
+        <option value="gb1">GB2312 一级全部 3755 字（约 40–70 分钟）</option>
+        <option value="custom">自定义</option>
+      </select></label>
+    <textarea id="custom-targets" rows="3" placeholder="粘贴要生成的字" hidden></textarea>
+    <label class="field"><span>合并到</span><select id="merge"></select></label>
+    <label class="field"><span>每个字的字形套数</span>
+      <select id="sets"><option selected>1</option><option>2</option><option>3</option></select></label>
+    <label class="check"><input type="checkbox" id="replace" checked> 替换字体里原有的汉字</label>
+    <button id="generate" class="btn primary">生成并构建</button>
+    <div class="meter" id="gen-meter" hidden><span id="gen-bar"></span></div>
+    <div id="gen-result" class="muted small"></div>
+  </section>
+</main>
+
+<script src="/static/pen.js"></script>
+<script src="/static/pad.js"></script>
+<script src="/static/hanzi.js"></script>
+</body>
+</html>

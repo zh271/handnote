@@ -281,3 +281,124 @@ def test_paper_scan_api(server):
     assert status == 400
     assert _request(server, "/api/paper/raw/../../etc")[0] == 404
     assert _request(server, "/api/paper/file/secret.png")[0] == 404
+
+
+@pytest.fixture
+def toy_hanzi():
+    from test_hanzi_font import toy_data
+
+    from handnote import hanzi_data
+
+    original = hanzi_data._LOADED
+    hanzi_data.set_default(toy_data())
+    yield hanzi_data._LOADED
+    hanzi_data.set_default(original)
+
+
+def _post(server, path, body):
+    status, _h, raw = _request(server, path, data=json.dumps(body).encode(),
+                               headers={"Content-Type": "application/json"})
+    return status, json.loads(raw)
+
+
+def _wait(server, job):
+    import time
+
+    for _ in range(300):
+        status = json.loads(_request(server, f"/api/hanzi/job/{job}")[2])
+        if status["state"] != "running":
+            return status
+        time.sleep(0.1)
+    raise AssertionError("job did not finish")
+
+
+def test_hanzi_page(server):
+    status, _headers, body = _request(server, "/hanzi")
+    assert status == 200
+    assert b"/static/hanzi.js" in body and b"/static/pad.js" in body
+    for name in ("hanzi.js", "pad.js", "pen.js", "hanzi.css"):
+        assert _request(server, f"/static/{name}")[0] == 200
+    assert b'href="/hanzi"' in _request(server, "/")[2]
+    assert b'href="/hanzi"' in _request(server, "/capture")[2]
+
+
+def test_hanzi_guide_and_check(server, toy_hanzi):
+    from test_hanzi_font import capture_of
+
+    status = json.loads(_request(server, "/api/hanzi/status")[2])
+    assert status["available"] and len(status["recommended"]) == 100
+    info = json.loads(_request(server, "/api/hanzi/char?c=%E6%B1%9F")[2])["江"]
+    assert info["strokes"] == 6 and len(info["medians"]) == 6
+    first = capture_of(toy_hanzi, "江")["chars"][0]
+    code, result = _post(server, "/api/hanzi/check", {"char": "江", "strokes": first["strokes"]})
+    assert code == 200 and result["ok"]
+    code, result = _post(server, "/api/hanzi/check",
+                         {"char": "江", "strokes": first["strokes"][:2]})
+    assert not result["ok"] and "标准 6 笔" in result["reason"]
+
+
+def test_hanzi_model_status_without_torch(server, monkeypatch):
+    from handnote.webui import hanzi_api
+
+    monkeypatch.setattr(hanzi_api, "_torch", lambda: False)
+    code, status = _post(server, "/api/hanzi/model/status", {"capture": None})
+    assert code == 200 and status["torch"] is False and status["model"] is None
+    code, err = _post(server, "/api/hanzi/model/train",
+                      {"capture": {"chars": [{"char": "江", "strokes": [[[0, 0], [1, 1]]]}]}})
+    assert code == 400 and "pip install" in err["error"]
+
+
+def test_hanzi_model_jobs(server, toy_hanzi, monkeypatch, tmp_path):
+    """Train and generate through the API with the model calls stubbed out."""
+    pytest.importorskip("torch")
+    from test_hanzi_font import capture_of
+
+    from handnote.webui import hanzi_api
+
+    monkeypatch.setenv("HANDNOTE_CACHE", str(tmp_path))
+    monkeypatch.setattr(hanzi_api, "_torch", lambda: True)
+    capture = capture_of(toy_hanzi, "清工")
+    calls = {}
+
+    def fake_train(cap, target, iters, progress):
+        progress({"iter": iters, "iters": iters, "loss": 0.0, "val": 0.0, "eta": 0})
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"weights")
+        target.with_suffix(".json").write_text(json.dumps({"chars": 2, "iters": iters}))
+        calls["train"] = iters
+        return {"model": str(target), "chars": 2, "seconds": 0.1, "log": [], "warnings": []}
+
+    def fake_generate(cap, model, targets, sets, progress):
+        calls["generate"] = (targets, sets)
+        progress({"done": 1, "total": 1, "set": 0, "seconds": 0.1})
+        extra = capture_of(toy_hanzi, "江")["chars"]
+        return {"capture": {**cap, "chars": cap["chars"] + extra},
+                "report": {"generated": 1, "written": 2, "skipped": "", "sets": sets}}
+
+    monkeypatch.setattr(hanzi_api, "train_model", fake_train)
+    monkeypatch.setattr(hanzi_api, "generate_chars", fake_generate)
+
+    code, err = _post(server, "/api/hanzi/model/generate", {"capture": capture, "targets": "江"})
+    assert code == 400 and "训练" in err["error"]
+
+    code, started = _post(server, "/api/hanzi/model/train", {"capture": capture, "iters": 50})
+    assert code == 200
+    done = _wait(server, started["job"])
+    assert done["state"] == "done", done
+    assert "log" not in done["report"] and calls["train"] == 50
+    code, again = _post(server, "/api/hanzi/model/train", {"capture": capture})
+    assert again == {"job": None, "cached": True}
+    code, status = _post(server, "/api/hanzi/model/status", {"capture": capture})
+    assert status["model"]["chars"] == 2
+
+    code, started = _post(server, "/api/hanzi/model/generate",
+                          {"capture": capture, "targets": "江", "sets": 2, "pressure": 0})
+    assert code == 200
+    done = _wait(server, started["job"])
+    assert done["state"] == "done", done
+    report = done["report"]
+    assert calls["generate"] == ("江", 2)
+    assert report["glyphs"] == 3 and report["merged_replaced"] >= 3
+    assert _request(server, report["url"])[0] == 200
+    code, err = _post(server, "/api/hanzi/model/generate", {"capture": capture, "targets": "abc"})
+    assert code == 400

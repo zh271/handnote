@@ -174,6 +174,81 @@ def cmd_fonts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_json(path: str) -> dict:
+    text = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+    return json.loads(text)
+
+
+def _targets(spec: str) -> str:
+    from .hanzi_data import gb2312_level1
+
+    if spec == "gb1":
+        return "".join(gb2312_level1())
+    return Path(spec).read_text(encoding="utf-8")
+
+
+def cmd_hanzi(args: argparse.Namespace) -> int:
+    from . import hanzi_data
+    from .hanzi_font import build_hanzi_font
+
+    command = args.hanzi_command
+    if command == "fetch":
+        print(hanzi_data.fetch(force=args.force))
+        return 0
+    if command == "build":
+        out = Path(args.out)
+        raw = out.with_name(out.stem + "-hanzi.ttf") if args.merge else out
+        report = build_hanzi_font(_read_json(args.capture), raw, pressure=args.pressure)
+        if args.merge and report["glyphs"]:
+            merged = merge_fonts(args.merge, raw, out, replace=args.replace,
+                                 family_suffix=" Hand")
+            report.update(merged_into=args.merge, merged_added=merged["added"],
+                          merged_replaced=merged["replaced"], font=str(out))
+        report.pop("chars", None)
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        return 0 if report["glyphs"] else 1
+
+    from .model import torch_available
+
+    if not torch_available():
+        raise SystemExit("this command needs the model extra: pip install -e \".[model]\" "
+                         "--extra-index-url https://download.pytorch.org/whl/cpu")
+    from .model import weights
+
+    def show(info: dict) -> None:
+        print(json.dumps(info, ensure_ascii=False), file=sys.stderr, flush=True)
+
+    if command == "model-fetch":
+        def fetched(what: str, done: int, total: int) -> None:
+            if what == "content" or done == total or done % (32 << 20) < (1 << 20):
+                show({"file": what, "done": done, "total": total})
+
+        hanzi_data.fetch()
+        print(json.dumps(weights.fetch(fetched), ensure_ascii=False, indent=1))
+        return 0
+    if command == "train":
+        from .model.train import finetune
+
+        def trained(info: dict) -> None:
+            if info["iter"] % 25 == 0 or info["iter"] == info["iters"]:
+                show({k: round(v, 3) if isinstance(v, float) else v for k, v in info.items()})
+
+        report = finetune(_read_json(args.capture), args.out, iters=args.iters, progress=trained)
+        report.pop("log", None)
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        return 0
+    from .model.generate import generate
+
+    out = Path(args.out)
+    result = generate(_read_json(args.capture), args.model, _targets(args.targets),
+                      sets=args.sets, cache_path=out.with_suffix(".partial.json"),
+                      progress=lambda info: show(info) if info["done"] % 64 < 16 else None)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result["capture"], ensure_ascii=False), encoding="utf-8")
+    print(json.dumps({"out": str(out), **result["report"]}, ensure_ascii=False, indent=1))
+    return 0
+
+
 def cmd_paper(args: argparse.Namespace) -> int:
     """Turn a photo of blank paper into a page background and measure its lines."""
     from PIL import Image
@@ -286,6 +361,35 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("action", choices=["list", "fetch"], nargs="?", default="list")
     f.add_argument("names", nargs="*", help=f"font keys: {', '.join(SOURCES)}")
     f.set_defaults(func=cmd_fonts)
+
+    h = sub.add_parser("hanzi", help="handwritten Chinese characters (fine-tuned SDT model)")
+    hsub = h.add_subparsers(dest="hanzi_command", required=True)
+    hf = hsub.add_parser("fetch", help="download stroke data for the trace guide (makemeahanzi)")
+    hf.add_argument("--force", action="store_true", help="download again")
+    hm = hsub.add_parser("model-fetch", help="download the SDT weights and content glyphs")
+    ht = hsub.add_parser("train", help="fine-tune SDT on a hanzi capture (CPU, ~20 min)")
+    ht.add_argument("capture", help="hanzi capture JSON from /hanzi, or - for stdin")
+    ht.add_argument("-o", "--out", default="out/hanzi-model.pth")
+    ht.add_argument("--iters", type=int, default=300, help="training steps (~3.5 s each)")
+    hg = hsub.add_parser("generate", help="write characters with a fine-tuned model")
+    hg.add_argument("capture", help="the capture the model was trained on")
+    hg.add_argument("--model", required=True, help="model from `hanzi train`")
+    hg.add_argument("-o", "--out", default="out/hanzi-generated.json")
+    hg.add_argument("--targets", default="gb1",
+                    help="gb1 (GB2312 level 1, 3755 chars) or a text file whose characters "
+                         "to write (e.g. your notes)")
+    hg.add_argument("--sets", type=int, default=1, help="variants per character (1-8)")
+    hb = hsub.add_parser("build", help="build a font from a hanzi capture or generated JSON")
+    hb.add_argument("capture", help="hanzi JSON, or - for stdin")
+    hb.add_argument("-o", "--out", default="out/handnote-hanzi.ttf")
+    hb.add_argument("--merge", metavar="BASE_FONT",
+                    help="merge into a base font (glyf-based), e.g. ZhiMangXing")
+    hb.add_argument("--replace", action="store_true",
+                    help="with --merge: replace the base font's own glyphs for these characters")
+    hb.add_argument("--pressure", type=float, default=1.0,
+                    help="pen pressure gain: 0 = uniform width, 1 = default, 2 = strong")
+    for p in (hf, hm, ht, hg, hb):
+        p.set_defaults(func=cmd_hanzi)
 
     pa = sub.add_parser("paper", help="paper presets and scanned paper backgrounds")
     pasub = pa.add_subparsers(dest="paper_command", required=True)
