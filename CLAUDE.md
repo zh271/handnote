@@ -29,6 +29,7 @@ ruff check handnote tests
 | 文件 | 职责 |
 |---|---|
 | `handnote/config.py` | `RenderConfig`，所有可调参数；`from_mapping` 做类型转换、钳制与校验 |
+| `handnote/docx.py` | Word .docx → Markdown 子集（标准库解析 XML）：标题、编号、分页、软换行、OMML 公式 → LaTeX（只输出 mathtext 认识的命令，`tests/test_docx.py` 校验） |
 | `handnote/markdown.py` | Markdown 子集 → `Block` 列表；处理 `$..$`、`$$..$$`、矩阵提取、分页 |
 | `handnote/variants.py` | 多套字形：确定性轮廓变形、`SetPicker`、按套小字体 `GlyphSets`；手写变体优先 |
 | `handnote/opentype.py` | 手写多套 ↔ GSUB：`read_alternates`（读 `rand`）、`add_alternates`（追加 `rand`/`calt`） |

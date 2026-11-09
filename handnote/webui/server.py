@@ -316,8 +316,18 @@ class Handler(BaseHTTPRequestHandler):
         part = parts[0]
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         if kind == "markdown":
+            name = (part.filename or "").lower()
+            if name.endswith((".docx", ".doc")) or part.data[:2] == b"PK":
+                from ..docx import DocxError, docx_to_markdown
+
+                try:
+                    result = docx_to_markdown(part.data)
+                except DocxError as exc:
+                    return self._error(str(exc))
+                return self._json({"text": result.markdown, "filename": part.filename,
+                                   "warnings": result.warnings})
             text = part.data.decode("utf-8", errors="replace")
-            return self._json({"text": text, "filename": part.filename})
+            return self._json({"text": text, "filename": part.filename, "warnings": []})
         suffix = Path(part.filename or "upload.bin").suffix.lower()
         allowed = ({".ttf", ".otf", ".ttc"} if kind == "font"
                    else {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".json", ".pdf"})
