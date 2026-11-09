@@ -38,7 +38,10 @@ def build_unet():
 
 
 def ddim_times(steps: int) -> list[tuple[int, int]]:
-    """Upstream's DDIM timestep pairs, ``(T-1, ...), ..., (0, -1)``."""
+    """Upstream's DDIM timestep pairs from ``linspace(-1, 999, steps + 1)``.
+
+    With 50 steps: ``(999, 979), ..., (19, -1)``; the last pair returns the x0 estimate.
+    """
     import torch
 
     times = torch.linspace(-1, NOISE_STEPS - 1, steps=steps + 1).int().tolist()

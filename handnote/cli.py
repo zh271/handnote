@@ -319,6 +319,18 @@ def cmd_line(args: argparse.Namespace) -> int:
 
         print(json.dumps(weights.fetch(fetched), ensure_ascii=False, indent=1))
         return 0
+    if command == "generate":
+        from .linegen.style import check_text, wrap
+
+        text = args.text if args.text is not None else Path(args.file).read_text(encoding="utf-8")
+        lines = wrap(text, args.width)
+        if not lines:
+            raise SystemExit("nothing to write")
+        try:
+            for line in lines:
+                check_text(line)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     if not available():
         raise SystemExit("this command needs the linegen extra: pip install -e \".[linegen]\" "
                          "(see README for the GPU builds of torch)")
@@ -329,17 +341,7 @@ def cmd_line(args: argparse.Namespace) -> int:
                              half=args.half), ensure_ascii=False, indent=1))
         return 0
     from .linegen.generate import generate_lines, stack
-    from .linegen.style import check_text, wrap
 
-    text = args.text if args.text is not None else Path(args.file).read_text(encoding="utf-8")
-    lines = wrap(text, args.width)
-    if not lines:
-        raise SystemExit("nothing to write")
-    try:
-        for line in lines:
-            check_text(line)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
     images = generate_lines(lines, args.style, device=args.device, steps=args.steps,
                             seed=args.seed, half=args.half, progress=show)
     out = Path(args.out)
