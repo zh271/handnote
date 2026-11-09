@@ -212,6 +212,7 @@ python -m pytest tests/test_answer_skill.py -q
 - 提交信息用 Conventional Commits，小写前缀：`feat:`、`fix:`、`docs:`、`test:`、`refactor:`、`ci:`、`chore:`。
 - 推到 `main` 和每个 Pull Request 都会跑 [CI](.github/workflows/tests.yml)：ruff + 三个 Python 版本的 pytest。
 - 版本号在 `pyproject.toml` 和 `handnote/__init__.py` 两处，发布时同步修改。
+- 新功能从最新的 `main` 拉分支开发。`feat/hanzi-components` 是已冻结的参考分支（按偏旁拆分再拼合的手写汉字旧方案，被 SDT 模型取代，原因见 [MILESTONES.md](MILESTONES.md)）：不再更新，也不要合并进 `main`；需要借用其中的代码时手动挑选移植。
 
 ## 进度与待办
 
