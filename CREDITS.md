@@ -45,6 +45,18 @@ Pillow 和 Matplotlib 的 wheel 内置了 [FreeType](https://freetype.org/)（Da
 | STIX | 手写字体缺符号时 mathtext 的回退字形；handnote 会把它变形后再画 | STI Pub Companies | STIX Font License | <https://www.stixfonts.org/> |
 | DejaVu Sans | 测试中模拟“手写”填格、采集页描红字 | Bitstream（Vera）与 DejaVu 贡献者 | Bitstream Vera License，DejaVu 修改部分为公有领域 | <https://dejavu-fonts.github.io/> |
 
+## 手写汉字
+
+| 项目 | 用途 | 作者 | 许可 | 地址 |
+|---|---|---|---|---|
+| SDT（Style-Disentangled Transformer） | 手写汉字生成模型。网络结构 vendor 在 `handnote/model/sdt.py`，保留原版权声明；权重运行时从作者网盘下载 | Gang Dai 等（论文 *Disentangling Writer and Character Styles for Handwriting Generation*，CVPR 2023） | 代码 MIT | <https://github.com/dailenson/SDT> |
+| CASIA-OLHWDB | SDT 权重的训练数据（handnote 不直接使用） | 中国科学院自动化研究所 模式识别国家重点实验室 | **仅限研究用途** | <http://www.nlpr.ia.ac.cn/databases/handwriting/Home.html> |
+| makemeahanzi | 描红用的笔画中线、笔画数和外框 | Shaunak Kishore | 字典 LGPL-3.0+；笔画图形 Arphic Public License | <https://github.com/skishore/makemeahanzi> |
+| PyTorch、torchvision | 模型推理与微调（可选依赖） | PyTorch 基金会及贡献者 | BSD-3-Clause | <https://github.com/pytorch/pytorch> |
+| einops | 张量重排（可选依赖） | Alex Rogozhnikov | MIT | <https://github.com/arogozhnikov/einops> |
+
+权重和 makemeahanzi 数据都在运行时下载到本机缓存，不随仓库分发。SDT 权重来自只限研究用途的数据集，用它生成的手写汉字字体请只作个人使用。
+
 ## 生成的字体
 
 - 不加 `--merge` 构建出的符号字体，字形全部来自你自己的笔迹。

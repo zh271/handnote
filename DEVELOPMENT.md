@@ -15,10 +15,17 @@ pip install -e ".[test]" ruff
 python -m handnote fonts fetch zhimang # 测试需要默认字体
 ```
 
+开发手写汉字模型时再装可选依赖（CPU 版 PyTorch 即可）。没装时 `tests/test_model.py` 自动跳过：
+
+```bash
+pip install -e ".[test,model]" ruff --extra-index-url https://download.pytorch.org/whl/cpu
+python -m handnote hanzi model-fetch   # 真实权重，只有手动验证时需要；测试不用
+```
+
 日常命令：
 
 ```bash
-python -m pytest -q                    # 全部测试，约 240 个
+python -m pytest -q                    # 全部测试，约 290 个
 python -m pytest tests/test_render.py -q
 ruff check handnote tests              # 必须干净
 python -m handnote serve               # 改了 Python 代码要重启；改 webui 静态文件刷新页面即可
@@ -39,6 +46,9 @@ handnote/
   opentype.py     GSUB 读写：rand / calt 变体
   symbols.py      模板生成、cv2 描摹、assemble_font、merge_fonts
   capture.py      浏览器笔画 JSON 校验、光栅化、build_capture_font
+  hanzi_data.py   makemeahanzi 下载与缓存：描红中线、笔画数、标准外框
+  hanzi_font.py   汉字采集格式、笔顺提示、build_hanzi_font
+  model/          手写汉字模型（可选，需要 torch）：sdt 网络、权重下载、训练、生成、压感
   paper.py        稿纸：预设、行线网格 Grid、画线、扫描纸校正与行距检测
   fonts.py        字体缓存目录与下载源
   cli.py          命令行入口（python -m handnote）
@@ -95,6 +105,29 @@ symbols template ──▶ PDF + spec.json
 - 合并默认只补基础字体缺的码位。`replace=True` 只把手写过的码位指向手写字形，不删旧字形，并把手写字形缩放到旧字形的框里。
 - 手写多套写成 `uniXXXX.sN` 字形 + `rand`（AlternateSubst）+ `calt`（ChainContextSubst）。合并后 `post` 表降为 3.0，字形名不可靠，渲染器只从 `rand` 读取变体。
 
+### 手写汉字链路
+
+```
+/hanzi 页面（描红 + 笔顺提示）──▶ 采集 JSON（60–100 字的笔画轨迹）
+                                      │
+              model.train.finetune：SDT 权重 + 笔迹损失微调 ──▶ 模型 .pth + .json（含压感回归）
+                                      │
+   model.generate.generate：逐字生成 ─ 少笔重写 ─ 平滑 ─ 按标准外框摆放 ─ 补压感
+                                      │
+                      采集 JSON（手写字 + 生成字）
+                                      │
+          hanzi_font.build_hanzi_font（capture.rasterize_strokes → symbols._cell_glyph(cjk=True)）
+                                      │
+             merge_fonts（--replace；CJK 用全局缩放）──▶ 合并后的 TTF
+```
+
+- 模型是 SDT（CVPR 2023）：风格编码器读 15 张书写者的字图，内容编码器读一张标准字形，两个解码器逐点输出笔迹（GMM 位移 + 落笔/抬笔/结束）。网络 vendor 在 `model/sdt.py`。
+- 预训练权重直接用会写出潦草连笔：它把书写者的样本当成 CASIA 里的快写。用书写者自己的笔画轨迹微调后，没写过的字也工整、像本人。微调只用笔迹损失（对比损失需要多个书写者），冻结内容编码器，约 300 步。
+- 风格图必须是等宽细线、贴左上角，与 SDT 的数据一致；带压感的粗细笔画会被读成快写。
+- 推理比上游快约 3 倍：解码器只跑已生成的前缀（因果掩码下等价），一批里所有字都结束就停（上游要求同一步结束）。
+- 漏笔：约 10% 的生成字比标准少一笔，多数是合理的连写；少两笔以上的字换风格图重写，仍然不行就不收入字体。
+- 训练和生成都很慢（分钟级），Web 端放在后台线程，进度写进 `_JOBS`，页面轮询；生成结果每 64 字落盘一次，可以续跑。
+
 ### Web 服务
 
 `handnote/webui/server.py` 基于 `http.server`，单进程，只监听 `127.0.0.1`。matplotlib 的 rcParams 是全局状态，渲染入口用模块级锁串行化。
@@ -113,11 +146,15 @@ symbols template ──▶ PDF + spec.json
 | `GET /api/guide-font` | 采集页用的描红字体（按字符子集化） |
 | `POST /api/symbols/capture` | 提交笔画 JSON，构建并可选合并、替换 |
 | `GET /api/font-file/<name>` | 下载构建好的字体 |
-
+| `GET /hanzi`、`GET /api/hanzi/status`、`GET /api/hanzi/char?c=…` | 汉字页；笔顺数据是否已下载、推荐字表；描红中线与笔数 |
+| `POST /api/hanzi/check` | 单字笔顺提示 |
+| `POST /api/hanzi/model/status` | `{capture}` → torch 是否安装、权重是否下载、这份采集是否已训练、正在运行的任务 |
+| `POST /api/hanzi/model/fetch`、`train`、`generate` | 后台任务：下载权重；微调；生成 + 建字体 + 合并（训练和生成同一时间只跑一个） |
+| `GET /api/hanzi/job/<id>` | 任务进度与结果 |
 | `POST /api/paper/scan`、`GET /api/paper/raw/<id>` | 上传纸张照片，返回自动识别的四角；角点编辑用的缩略图 |
 | `POST /api/paper/apply`、`GET /api/paper/file/<name>` | 按四角校正、去阴影，存为 `paper-*.png`，并检测行距 |
 
-稿纸相关路由在 `webui/paper_api.py`，`server.py` 只做转发。`/api/render` 只接受 `var/uploads/paper-*.png` 作为 `paper_image`。
+汉字相关路由在 `webui/hanzi_api.py`，稿纸相关在 `webui/paper_api.py`，`server.py` 只做转发。`/api/render` 只接受 `var/uploads/paper-*.png` 作为 `paper_image`。
 
 上传和构建产物写到当前目录的 `var/uploads/`（已在 `.gitignore`）。
 

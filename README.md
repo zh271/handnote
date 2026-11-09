@@ -9,8 +9,9 @@
 - **像手写**：每个字随机旋转、位移、深浅不一；同一个字反复出现时字形也不完全一样。
 - **能写数学**：行内公式、居中公式、手绘括号的矩阵，和正文用同一种手写字体。
 - **用你自己的笔迹**：在浏览器里（或打印纸上）把数学符号、数字、字母写一遍，生成字体后合并进中文手写体。
+- **汉字也用你的字**：写 60–100 个汉字，微调一个手写生成模型，由它写出其余几千个常用字（可选，需要 PyTorch）。
 - **配合 AI 答题**：附带一份 agent skill，让 AI 只输出题号和精简推导，交给 handnote 直接排成手写答卷。
-- **纯本地**：只用 CPU，不需要显卡和模型；附带本机 Web 界面，调参实时预览。
+- **纯本地**：只用 CPU，不需要显卡；附带本机 Web 界面，调参实时预览。只有“手写汉字”用到模型，可以不装。
 
 > 本文是使用说明。参与开发请看 [DEVELOPMENT.md](DEVELOPMENT.md)，用到的开源项目见 [CREDITS.md](CREDITS.md)。
 
@@ -20,6 +21,7 @@
 - [快速上手](#快速上手)
 - [Markdown 写法](#markdown-写法)
 - [用自己的笔迹](#用自己的笔迹)
+- [手写汉字](#手写汉字)
 - [多套字形](#多套字形)
 - [稿纸](#稿纸)
 - [参数](#参数)
@@ -147,7 +149,7 @@ handnote 支持 Markdown 的一个子集：
 
 ## 用自己的笔迹
 
-默认字体缺很多数学符号（`∈ ∪ ⊆ √ ∑ ∫` 等），数字和字母也未必合你心意（比如志莽行书的 0 中间有一道）。补字的流程是：把模板里的 202 个符号、数字、字母写一遍，handnote 描摹成字体，再合并进中文手写体。汉字不需要写。
+默认字体缺很多数学符号（`∈ ∪ ⊆ √ ∑ ∫` 等），数字和字母也未必合你心意（比如志莽行书的 0 中间有一道）。补字的流程是：把模板里的 202 个符号、数字、字母写一遍，handnote 描摹成字体，再合并进中文手写体。汉字见下一节[手写汉字](#手写汉字)。
 
 ### 方法一：浏览器手写（推荐）
 
@@ -193,6 +195,57 @@ python -m handnote symbols build scan-1.png scan-2.png scan-3.png \
 - `--keep` 与网页上的“保留书写误差”相同，`--pressure` 与“压感”滑块相同。
 
 Web 界面的“符号页”栏可以完成同样的操作：下载模板、上传扫描图、勾选合并与替换。
+
+## 手写汉字
+
+逐个写几千个汉字不现实。handnote 让你只写 60–100 个字，用它们微调一个手写生成模型（[SDT](https://github.com/dailenson/SDT)，CVPR 2023），再由模型按你的写法写出其余的字，最后描摹成字体、合并进中文手写体。
+
+- 模型从你写字的笔画轨迹里学习，学的是整字的写法，没写过的字也连贯自然。
+- 全程在本机 CPU 上运行：训练约 10–20 分钟，生成每字约 0.7 秒（GB2312 一级 3755 字约 40–70 分钟，视机器而定）。
+- 你写过的字直接用原笔迹。模型写的字有少笔画的会自动重写；仍然少两笔以上的字不收入字体，保留原字体的字形。
+- 生成的笔画按你的压感习惯加粗细：从你的笔迹里学出起笔、行笔、收笔的轻重；没有压感数据时用通用规则。
+
+### 安装模型依赖
+
+模型需要 PyTorch（CPU 版即可，约 200MB）：
+
+```bash
+pip install -e ".[model]" --extra-index-url https://download.pytorch.org/whl/cpu
+python -m handnote hanzi model-fetch        # 下载 SDT 权重（约 270MB）和笔顺数据，只需一次
+```
+
+权重从 SDT 作者的 Google Drive 下载到 `~/.cache/handnote/sdt/`。访问不了时，按报错提示从作者的百度网盘镜像下载 `checkpoint-iter199999.pth`、`Chinese_content.pkl`、`character_dict.pkl`，放进这个目录，再运行一次 `model-fetch`。
+
+> **许可**：SDT 的代码是 MIT 许可；它的权重用 [CASIA-OLHWDB](http://www.nlpr.ia.ac.cn/databases/handwriting/Home.html) 训练，这个数据集**仅限研究用途**。handnote 不分发权重，用它生成的字体请只作个人使用。
+
+### 怎么写
+
+1. 启动 `python -m handnote serve`，打开 `http://127.0.0.1:8765/hanzi`（顶栏“③ 手写汉字”）。第一次会提示下载笔顺数据（[makemeahanzi](https://github.com/skishore/makemeahanzi)，约 33MB），用来画描红。
+2. 左侧“推荐”是 100 个结构各不相同的常用字，从前往后写即可；“我的笔记”列出渲染器里当前笔记用到的字。也可以在输入框里加任意字。
+3. 照着浅灰描红写，笔顺号标在每笔起点。像平时写字一样写，不必刻意工整；写够笔数后会提示笔顺是否和标准一致，不一致也可以保留，模型照样能学。压感设置与符号采集页共用。
+4. 右侧“模型生成”：
+   - **训练模型**：写到 30 个字以上可用，建议 60–100 个。显示进度和剩余时间；同一份笔迹训练一次就够，加写了字再重新训练。
+   - **生成并构建**：选择生成“我的笔记里用到的字”（几十秒到几分钟）、GB2312 一级全部 3755 字，或自定义的字；选择合并到哪个字体。完成后点“在渲染器中使用”。
+
+任务在后台运行，刷新页面不会中断。生成中途停止的，下次从断点继续。
+
+### 命令行
+
+```bash
+python -m handnote hanzi train hanzi.json -o out/hanzi-model.pth          # 训练（约 300 步）
+python -m handnote hanzi generate hanzi.json --model out/hanzi-model.pth     --targets notes.md -o out/generated.json                              # 只生成笔记里的字
+python -m handnote hanzi generate hanzi.json --model out/hanzi-model.pth     --targets gb1 -o out/generated.json                                   # GB2312 一级全部
+python -m handnote hanzi build out/generated.json -o out/hand.ttf     --merge ~/.cache/handnote/fonts/ZhiMangXing-Regular.ttf --replace
+```
+
+`hanzi.json` 是网页上“导出 JSON”得到的文件，格式见 [docs/formats.md](docs/formats.md#6-手写汉字)。`generate` 的输出是同样格式的 JSON（你写的字加上模型写的字），`build` 把它描摹成字体。
+
+### 注意
+
+- 只支持浏览器书写，模型需要笔画轨迹，扫描件没有。
+- 少数字会写错或漏笔（实测约 3–5%），可以把这些字亲手写一遍、重新训练和生成。
+- 写得越多、字的结构越多样，生成的字越像你。
+- 模型和生成结果只由你的笔迹决定：同一份笔迹、同一个模型文件，生成的字体相同。
 
 ## 稿纸
 
@@ -359,6 +412,7 @@ mathtext 解析失败，通常是用了不支持的命令（`\le`、`\iff`、`ca
 
 - PDF 里的字是轮廓，不是可选中、可搜索的文字；PNG 是位图。
 - 手写多套只覆盖写过的字符；汉字只有合成的多套。
+- 手写汉字需要 PyTorch 和 SDT 权重（仅限个人使用），少数生成的字会漏笔。
 - 透视校正只处理平面变形；纸张弯曲、褶皱无法拉平。
 - 公式不支持 `cases`、`aligned`、`array` 等环境。
 - Word 里的公式（OMML）不经过 handnote，无法带上手写抖动。

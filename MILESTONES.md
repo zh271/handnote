@@ -10,6 +10,7 @@
 | M5b | 手写多套：采集页 / 多份扫描 → 字体变体 + OpenType `rand`/`calt` → 渲染 | [VERIFIED] | `tests/test_sets.py` |
 | M6 | 扫描鲁棒性：透视校正、自动页序识别 | [VERIFIED] | `tests/test_perspective.py` |
 | M7 | 浏览器手写采集：笔画 schema、光栅化、采集页 | [VERIFIED] | `tests/test_capture.py`, `tests/test_webui.py::test_capture_endpoint` |
+| M8 | 手写汉字：写 60–100 字 → 微调 SDT → 生成 GB2312 字 → 字体 | [VERIFIED] | `tests/test_model.py`, `tests/test_model_numpy.py`, `tests/test_hanzi_font.py`, `tests/test_webui.py::test_hanzi_model_jobs` |
 
 ## 决策记录
 
@@ -21,3 +22,5 @@
 - 多套字形先在渲染期合成，不写进字体。mathtext 只能用一个字体家族，无法逐字选 OpenType 变体；逐字形替换 matplotlib 轮廓是唯一能让公式里重复符号不同的办法，正文复用同一套变形参数，保证同一套在公式和正文里一致。
 - 手写多套以 OpenType 变体写进字体，而不是拆成多个字体文件：一份 TTF 既能给渲染器用，装进系统后在 HarfBuzz（`rand`）和 Word（`calt`）里也会轮换。渲染器读 `rand` 而不认字形名，因为合并后 `post` 降为 3.0，名字不保留。
 - 采集用 cell-local 归一化坐标而不是页面像素。页面缩放、设备像素比、屏幕尺寸都不影响生成结果，同一份 JSON 可在 128–1024px 任意分辨率光栅化。
+- 手写汉字先试了"按偏旁拆分再拼合"（分支 `feat/hanzi-components`，冻结留作参考）：写约 430 字就能覆盖 GB2312 一级，但部件只做外框变换，拼出的字生硬。改用生成模型 SDT（CVPR 2023，MIT 代码，CASIA-OLHWDB 预训练）。预训练模型直接用效果差：用户的工整楷书被写成潦草连笔，换预处理、换样本数都无效。用用户自己的笔画轨迹在 CPU 上微调约 300 步后，没写过的字也工整、结构正确、风格接近本人。Inko 等在线服务不考虑：闭源、收费、强制加 AI 标识，与本地优先冲突。
+- 模型是可选依赖，权重运行时下载、不分发：CASIA 数据只限研究用途。核心渲染与补字仍然不需要任何模型。
