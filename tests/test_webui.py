@@ -118,6 +118,24 @@ def test_upload_markdown(server):
     assert json.loads(raw)["text"] == "# 标题"
 
 
+def test_upload_word(server):
+    from test_docx import _docx, _p
+
+    table = "<w:tbl><w:tr><w:tc>" + _p("格") + "</w:tc></w:tr></w:tbl>"
+    word = _docx(_p("标题", "Heading1") + table)
+    body, ctype = _multipart({}, [("file", "note.docx", word, "application/octet-stream")])
+    status, _headers, raw = _request(server, "/api/upload?kind=markdown", data=body,
+                                     headers={"Content-Type": ctype})
+    assert status == 200, raw
+    data = json.loads(raw)
+    assert data["text"] == "# 标题\n\n格\n" and data["warnings"] == ["1 个表格按行转成了段落"]
+    body, ctype = _multipart({}, [("file", "old.doc", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",
+                                   "application/msword")])
+    status, _headers, raw = _request(server, "/api/upload?kind=markdown", data=body,
+                                     headers={"Content-Type": ctype})
+    assert status == 400 and "另存为" in json.loads(raw)["error"]
+
+
 def test_symbol_template_json(server):
     status, _headers, body = _request(
         server, "/api/symbols/template.json?cell_mm=12&dpi=150&cols=7&rows=10")

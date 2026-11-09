@@ -32,6 +32,20 @@ def _overrides(pairs: list[str]) -> dict:
     return data
 
 
+def _source(path: str) -> str:
+    """Markdown text of ``path``: a Markdown file, a Word .docx, or ``-`` for stdin."""
+    if path == "-":
+        return sys.stdin.read()
+    if Path(path).suffix.lower() in (".docx", ".doc"):
+        from .docx import docx_to_markdown
+
+        result = docx_to_markdown(Path(path).read_bytes())
+        for note in result.warnings:
+            print(f"note: {note}", file=sys.stderr)
+        return result.markdown
+    return Path(path).read_text(encoding="utf-8")
+
+
 def _config(args: argparse.Namespace) -> RenderConfig:
     data: dict[str, object] = {}
     if getattr(args, "paper", None):
@@ -44,7 +58,7 @@ def _config(args: argparse.Namespace) -> RenderConfig:
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    source = Path(args.input).read_text(encoding="utf-8") if args.input != "-" else sys.stdin.read()
+    source = _source(args.input)
     cfg = _config(args)
     renderer = Renderer(cfg)
     blocks = parse(source)
@@ -81,7 +95,7 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
-    source = Path(args.input).read_text(encoding="utf-8") if args.input != "-" else sys.stdin.read()
+    source = _source(args.input)
     cfg = _config(args)
     renderer = Renderer(cfg)
     report = renderer.coverage(parse(source))
@@ -240,6 +254,20 @@ def cmd_paper(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_docx(args: argparse.Namespace) -> int:
+    from .docx import docx_to_markdown
+
+    result = docx_to_markdown(Path(args.input).read_bytes())
+    for note in result.warnings:
+        print(f"note: {note}", file=sys.stderr)
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(result.markdown, encoding="utf-8")
+    else:
+        sys.stdout.write(result.markdown)
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .webui.server import serve
 
@@ -257,7 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="override any RenderConfig field")
 
     r = sub.add_parser("render", help="render Markdown to PNG or PDF")
-    r.add_argument("input", help="Markdown file, or - for stdin")
+    r.add_argument("input", help="Markdown or Word (.docx) file, or - for stdin")
     r.add_argument("-o", "--out", default="out/handnote.pdf",
                    help="output .pdf, single .png, or a directory")
     r.add_argument("--paper", metavar="PRESET",
@@ -266,7 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_render)
 
     a = sub.add_parser("analyze", help="report glyphs missing from the font")
-    a.add_argument("input", help="Markdown file, or - for stdin")
+    a.add_argument("input", help="Markdown or Word (.docx) file, or - for stdin")
     add_common(a)
     a.set_defaults(func=cmd_analyze)
 
@@ -362,6 +390,11 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--whiten", type=float, default=0.6, help="0-1, brighten the paper")
     ps.add_argument("--gray", action="store_true", help="drop the colour")
     pa.set_defaults(func=cmd_paper)
+
+    d = sub.add_parser("docx", help="convert a Word .docx into handnote Markdown")
+    d.add_argument("input", help=".docx file")
+    d.add_argument("-o", "--out", help="output .md (default: stdout)")
+    d.set_defaults(func=cmd_docx)
 
     w = sub.add_parser("serve", help="start the local web UI")
     w.add_argument("--host", default="127.0.0.1")

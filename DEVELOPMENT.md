@@ -32,6 +32,7 @@ Linux 上 opencv 需要 `libglib2.0-0`（CI 里用 apt 安装）。
 handnote/
   config.py       RenderConfig：全部参数、类型转换、取值钳制
   markdown.py     Markdown 子集 -> Block；$..$ / $$..$$、矩阵提取、分页符
+  docx.py         Word .docx -> Markdown 子集（标题、编号、分页、公式 OMML -> LaTeX）
   coverage.py     LaTeX -> Unicode 映射，对比字体 cmap 报缺字
   render.py       Renderer：layout -> paginate -> render_page / render_vector
   vector.py       矢量页面记录与无依赖的 PDF 写出器
