@@ -234,3 +234,50 @@ def test_template_json_with_sets(server):
         server, "/api/symbols/template.json?cell_mm=12&dpi=150&sets=2")
     assert status == 200
     assert json.loads(body)["sets"] == 2
+
+
+def test_paper_scan_api(server):
+    import io
+
+    from test_paper import _photo
+
+    status, _headers, body = _request(server, "/api/state")
+    assert any(p["key"] == "tianzi" for p in json.loads(body)["paper_presets"])
+
+    photo, _ = _photo()
+    buffer = io.BytesIO()
+    photo.save(buffer, format="PNG")
+    data, ctype = _multipart({}, [("file", "sheet.png", buffer.getvalue(), "image/png")])
+    status, _headers, body = _request(server, "/api/paper/scan", data=data,
+                                      headers={"Content-Type": ctype})
+    assert status == 200, body
+    scan = json.loads(body)
+    assert len(scan["corners"]) == 4
+    status, headers, raw = _request(server, scan["preview"])
+    assert status == 200 and headers["Content-Type"] == "image/jpeg"
+
+    payload = json.dumps({"id": scan["id"], "corners": scan["corners"],
+                          "width": 600, "height": 840}).encode()
+    status, _headers, body = _request(server, "/api/paper/apply", data=payload,
+                                      headers={"Content-Type": "application/json"})
+    assert status == 200, body
+    applied = json.loads(body)
+    assert applied["rules"]["pitch"] > 25
+    status, _headers, png = _request(server, applied["url"])
+    assert status == 200 and png.startswith(b"\x89PNG")
+
+    config = {"paper_style": "image", "paper_image": applied["path"],
+              "rule_pitch": applied["rules"]["pitch"], "rule_top": applied["rules"]["top"]}
+    payload = json.dumps({"markdown": "第一行\n\n第二行", "config": config}).encode()
+    status, _headers, body = _request(server, "/api/render", data=payload,
+                                      headers={"Content-Type": "application/json"})
+    assert status == 200, body
+    assert not json.loads(body)["warnings"]
+
+    config["paper_image"] = __file__
+    payload = json.dumps({"markdown": "字", "config": config}).encode()
+    status, _headers, body = _request(server, "/api/render", data=payload,
+                                      headers={"Content-Type": "application/json"})
+    assert status == 400
+    assert _request(server, "/api/paper/raw/../../etc")[0] == 404
+    assert _request(server, "/api/paper/file/secret.png")[0] == 404

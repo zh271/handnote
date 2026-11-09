@@ -31,6 +31,7 @@ from matplotlib.textpath import TextPath, text_to_path  # noqa: E402
 from matplotlib.transforms import Affine2D  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
+from . import paper as paperlib  # noqa: E402
 from .config import RenderConfig  # noqa: E402
 from .coverage import analyze  # noqa: E402
 from .fonts import resolve_font  # noqa: E402
@@ -85,6 +86,12 @@ def _register(path: Path) -> str:
     family = fm.FontProperties(fname=key).get_name()
     _REGISTERED[key] = family
     return family
+
+
+def _fit_units(shift: float, advance: float, unit: float) -> tuple[float, float]:
+    """Centre ``advance`` in the fewest whole ``unit`` s; returns ``(shift, advance)``."""
+    n = max(1, math.ceil(advance / unit - 1e-6))
+    return shift + (n * unit - advance) / 2, n * unit
 
 
 def _tokenize(segments: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -145,6 +152,10 @@ class Renderer:
 
     def __init__(self, cfg: RenderConfig):
         cfg.validate()
+        fitted = paperlib.fit_body(cfg)
+        if fitted is not None and fitted != cfg.body_size:
+            # Counted essay paper: the cells decide the character size.
+            cfg = cfg.replace(body_size=fitted)
         self.cfg = cfg
         self.font_path = resolve_font(cfg.font_path)
         self.family = _register(self.font_path)
@@ -164,6 +175,10 @@ class Renderer:
         self._rec: list[tuple] | None = None
         self._raster = True
         self.warnings: list[str] = []
+        #: Rows and cells the text snaps to (see :mod:`handnote.paper`).
+        self.grid = paperlib.grid(cfg)
+        if cfg.paper_style == "image" and paperlib.background(cfg) is None:
+            self.warn(f"paper image not found: {cfg.paper_image or '(none)'}")
         self._apply_mathtext()
 
     # -- setup ------------------------------------------------------------
@@ -530,7 +545,12 @@ class Renderer:
 
     # -- layout -----------------------------------------------------------
     def heading_size(self, kind: str) -> int:
-        return {"h1": self.cfg.h1_size, "h2": self.cfg.h2_size, "h3": self.cfg.h3_size}[kind]
+        size = {"h1": self.cfg.h1_size, "h2": self.cfg.h2_size, "h3": self.cfg.h3_size}[kind]
+        if self.grid.align:
+            # One character per cell: headings may not outgrow the cell.
+            body = self.cfg.body_size
+            size = min(max(size, body), max(body, round(self.grid.align * 0.88)))
+        return size
 
     def matrix_metrics(self, rows: list[list[str]]) -> tuple[float, float, float, float]:
         """Return ``(cell_w, row_h, matrix_w, matrix_h)`` for a matrix."""
@@ -568,17 +588,23 @@ class Renderer:
                 continue
 
             size = self.heading_size(kind) if kind in ("h1", "h2", "h3") else cfg.body_size
-            indent = 16 if kind == "bullet" else 0
-            avail = cfg.page_width - 2 * cfg.margin_x - indent
+            cell = self.grid.align
+            indent = 0 if cell else (16 if kind == "bullet" else 0)
+            avail = (self.grid.cols * cell if cell else cfg.page_width - 2 * cfg.margin_x) - indent
             toks = _drop_math_spaces(_tokenize(block.segments))
             cur: list[tuple[str, str]] = []
             x = 0.0
+            gap: float | None = None
             for tok in toks:
                 if tok[0] == "m":
                     w = self.math_advance(tok[1], size)[1]
+                    gap = None
+                elif cell:
+                    end, gap = self._cell_run(tok[1], size, indent + x, gap)
+                    w = end - indent - x
                 else:
                     w = sum(self.char_metrics(ch, size)[1] for ch in tok[1])
-                if x + w > avail and cur:
+                if x + w > avail + 1e-6 and cur:
                     if tok[0] == "t" and tok[1] and tok[1][0] in _NO_LINE_START:
                         cur.append(tok)
                         x += w
@@ -592,7 +618,56 @@ class Renderer:
                 lines.append(self._text_line(kind, size, indent, cur))
             if kind in ("h1", "h2"):
                 lines.append({"kind": "gap", "h": 6})
+        if self.grid.snap:
+            for line in lines:
+                self._snap_line(line)
         return lines
+
+    def _snap_line(self, line: dict) -> None:
+        """Round a line up to whole rows so every baseline lands on a rule."""
+        g = self.grid
+        pitch = g.pitch
+        kind = line["kind"]
+        if kind in ("gap", "pagebreak"):
+            line["h"] = 0
+            return
+        if kind in ("display", "matrix"):
+            line["h"] = max(1, math.ceil(line["h"] / pitch - 0.1)) * pitch
+            return
+        size = line["size"]
+        above = line.get("pad", 0) + size * 1.28
+        below = line["h"] - above
+        row = max(0, math.ceil((above - g.baseline) / pitch - 0.2))
+        rows = max(row + 1, math.ceil((row * pitch + g.baseline + below) / pitch - 0.2))
+        line["pad"] = row * pitch + g.baseline - size * 1.28
+        line["h"] = rows * pitch
+
+    def _cell_run(self, text: str, size: int, x: float, gap: float | None = None
+                  ) -> tuple[float, float | None]:
+        """Pen position after ``text`` from ``x`` (relative to the cells).
+
+        ``gap`` is where a run of spaces before ``text`` began (``None`` if
+        none); returns the new position and the open space run.
+        """
+        for ch in text:
+            x, gap = self._cell_align(x, ch, gap)
+            x += self.char_metrics(ch, size)[1]
+        return x, gap
+
+    def _cell_align(self, x: float, ch: str, gap: float | None) -> tuple[float, float | None]:
+        """Where ``ch`` starts, and the open space run after it.
+
+        Full-width characters start on a cell boundary. Spaces right before
+        one take no cell of their own (``1.  求`` fills two cells, not
+        three): the character snaps to the boundary after the run began.
+        """
+        if ch.isspace():
+            return x, x if gap is None else gap
+        cell = self.grid.align
+        if not cell or ch.isascii():
+            return x, None
+        start = x if gap is None else gap
+        return math.ceil(start / cell - 1e-6) * cell, None
 
     # -- spacing ----------------------------------------------------------
     def _ink(self, ch: str, px: int) -> tuple[int, int] | None:
@@ -637,6 +712,13 @@ class Renderer:
         from its ink, blended by ``punct_squeeze``.
         """
         cfg = self.cfg
+        cell = self.grid.align
+        if cell:
+            # Essay paper: one cell per character, half a cell per ASCII character.
+            if ch.isspace():
+                return 0.0, cell / 2
+            return _fit_units(0.0, self._glyph_advance(ch, size, k),
+                              cell / 2 if ch.isascii() else cell)
         if ch.isspace():
             return 0.0, self.font(size).getlength(ch)
         advance = self._glyph_advance(ch, size, k)
@@ -674,7 +756,10 @@ class Renderer:
             self._math_ink[key] = (box[0], box[2])
         left, right = self._math_ink[key]
         gap = self.cfg.math_gap * size
-        return gap - left, gap + (right - left) + gap
+        shift, advance = gap - left, gap + (right - left) + gap
+        if self.grid.align:
+            return _fit_units(shift, advance, self.grid.align / 2)
+        return shift, advance
 
     def _text_line(self, kind: str, size: int, indent: int,
                    toks: list[tuple[str, str]]) -> dict:
@@ -695,11 +780,11 @@ class Renderer:
 
     def paginate(self, lines: list[dict]) -> list[list[dict]]:
         """Split lines into pages, honouring page breaks and keep-with-next."""
-        cfg = self.cfg
         pages: list[list[dict]] = []
         cur: list[dict] = []
-        y = cfg.margin_top
-        limit = cfg.page_height - cfg.margin_bottom
+        top = self.grid.top
+        y = top
+        limit = self.grid.bottom
         i = 0
         while i < len(lines):
             line = lines[i]
@@ -707,7 +792,7 @@ class Renderer:
                 if cur:
                     pages.append(cur)
                     cur = []
-                y = cfg.margin_top
+                y = top
                 i += 1
                 continue
             need = line["h"]
@@ -717,10 +802,10 @@ class Renderer:
                 need += nxt["h"]
             if nxt and line["kind"] in ("h1", "h2", "h3"):
                 need += min(nxt["h"], 46)
-            if y + need > limit and cur:
+            if y + need > limit + 0.5 and cur:
                 pages.append(cur)
                 cur = []
-                y = cfg.margin_top
+                y = top
             cur.append(line)
             y += line["h"]
             i += 1
@@ -729,16 +814,27 @@ class Renderer:
         return pages
 
     # -- drawing ----------------------------------------------------------
-    def paper(self, state: _State) -> Image.Image:
+    def paper(self, state: _State, page_no: int = 1) -> Image.Image:
+        """Page background: tinted grain, printed rules, or a scanned sheet."""
         cfg = self.cfg
         w, h = cfg.page_width, cfg.page_height
-        if not cfg.paper:
+        scan = paperlib.background(cfg)
+        if scan is not None:
+            return scan.convert("RGBA")
+        rules = paperlib.rules(cfg, self.grid, page_no)
+        if not cfg.paper and not rules:
             return Image.new("RGBA", (w, h), (255, 255, 255, 255))
-        rng = state.np_rng
-        field = np.full((h, w, 3), cfg.paper_base + 0.5, dtype=np.float32)
-        field += rng.normal(0, max(cfg.paper_noise, 1e-6), (h, w, 1)).astype(np.float32)
-        gradient = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None, None]
-        field -= cfg.paper_gradient * gradient
+        if cfg.paper:
+            rng = state.np_rng
+            base = np.asarray(paperlib.paper_rgb(cfg), dtype=np.float32) + 0.5
+            field = np.empty((h, w, 3), dtype=np.float32)
+            field[:] = base
+            field += rng.normal(0, max(cfg.paper_noise, 1e-6), (h, w, 1)).astype(np.float32)
+            gradient = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None, None]
+            field -= cfg.paper_gradient * gradient
+        else:
+            field = np.full((h, w, 3), 255.0, dtype=np.float32)
+        paperlib.paint_rules(field, rules)
         return Image.fromarray(np.clip(field, 0, 255).astype(np.uint8)).convert("RGBA")
 
     def draw_char(
@@ -871,8 +967,10 @@ class Renderer:
         self, lines: list[dict], page_no: int, total: int, state: _State
     ) -> Image.Image | None:
         cfg = self.cfg
-        canvas = self.paper(state) if self._raster else None
-        y = float(cfg.margin_top)
+        canvas = self.paper(state, page_no) if self._raster else None
+        y = float(self.grid.top)
+        cell = self.grid.align
+        origin = self.grid.x0 if cell else float(cfg.margin_x)
         for line in lines:
             kind = line["kind"]
             if kind == "gap":
@@ -890,9 +988,10 @@ class Renderer:
                 y += line["h"]
                 continue
             size = line["size"]
-            x = float(cfg.margin_x + line["indent"])
+            x = origin + line["indent"]
             baseline = y + line.get("pad", 0) + size * 1.28
             rot_scale = 0.55 if kind == "h1" else 1.0
+            gap: float | None = None
             for tok_kind, value in line["toks"]:
                 if tok_kind == "m":
                     px = round(size * cfg.math_scale)
@@ -901,8 +1000,12 @@ class Renderer:
                     self._place_math(canvas, value, px,
                                      (int(round(x + shift)), int(baseline - base)))
                     x += advance
+                    gap = None
                 else:
                     for ch in value:
+                        if cell:
+                            rel, gap = self._cell_align(x - origin, ch, gap)
+                            x = origin + rel
                         x += self.draw_char(canvas, x, baseline, ch, size, state,
                                             rot=cfg.jitter_rot * rot_scale)
             y += line["h"]
@@ -931,18 +1034,24 @@ class Renderer:
         """Record blocks as vector pages, matching :meth:`render` glyph for glyph.
 
         The same layout, set choices and jitter are drawn as outlines; only
-        the paper grain is left out (its tint and gradient are kept).
+        the paper grain is left out (its tint, gradient and rules are kept;
+        a scanned sheet is embedded as an image).
         """
         cfg = self.cfg
         with _LOCK:
             pages, state = self._start(blocks)
-            paper = ((float(cfg.paper_base), float(cfg.paper_base - cfg.paper_gradient))
-                     if cfg.paper else None)
+            scan = paperlib.background(cfg)
+            paper = None
+            if cfg.paper and scan is None:
+                top = tuple(float(c) for c in paperlib.paper_rgb(cfg))
+                paper = (top, tuple(c - cfg.paper_gradient for c in top))
             out: list[VectorPage] = []
             self._raster = False
             try:
                 for i, page in enumerate(pages):
-                    record = VectorPage(cfg.page_width, cfg.page_height, cfg.ink_rgb, paper)
+                    rules = [] if scan is not None else paperlib.rules(cfg, self.grid, i + 1)
+                    record = VectorPage(cfg.page_width, cfg.page_height, cfg.ink_rgb, paper,
+                                        rules=rules, background=scan)
                     self._rec = record.items
                     self.render_page(page, i + 1, len(pages), state)
                     out.append(record)

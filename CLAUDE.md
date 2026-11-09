@@ -33,6 +33,7 @@ ruff check handnote tests
 | `handnote/opentype.py` | 手写多套 ↔ GSUB：`read_alternates`（读 `rand`）、`add_alternates`（追加 `rand`/`calt`） |
 | `handnote/coverage.py` | LaTeX → Unicode 映射；对比字体 cmap 报缺字 |
 | `handnote/render.py` | `Renderer`：layout（测量）→ paginate（分页）→ render_page（绘制）；`char_metrics` / `math_advance` 是 layout 与绘制共用的唯一宽度来源 |
+| `handnote/paper.py` | 稿纸：`PRESETS`、行线网格 `grid()`、`rules()` / `paint_rules()`、扫描纸 `detect_page` / `flatten_scan` / `detect_rules` |
 | `handnote/vector.py` | `VectorPage` 记录与 PDF 写出：每个轮廓一个 Form XObject，`cm` 放置，ExtGState 控透明度 |
 | `handnote/symbols.py` | 模板生成、cv2 描摹、`assemble_font`、`merge_fonts` |
 | `handnote/capture.py` | 笔画 JSON 校验、光栅化、`build_capture_font` |
@@ -53,6 +54,8 @@ ruff check handnote tests
 7. **数字格式稳定**。`spec.json` 的 `cells[].index` 与 `capture.json` 的 `index` 是同一套编号，改动需同步迁移脚本。`set` 是独立维度，同一 `index` 每套一条；扫描件优先按四角 ArUco 标记定页（id = 页号 × 4 + 角号，页号按套优先排列），无标记的按自然文件名补位；每 `spec.pages` 页为一套。
 8. **变体靠 GSUB 识别**。合并后字形名不可靠，渲染器只从 `rand` 读手写变体。`add_alternates` 只能追加，不得改动已有 lookup；改动后跑 `tests/test_sets.py::test_add_alternates_keeps_existing_features`。
 9. **矢量与光栅同源**。`render_vector` 复用 `render_page`，只切换 `_raster` / `_rec`；绘制函数里随机数的调用顺序不得因模式而变。新增绘制代码要同时记录矢量项（`("path"|"stroke"|"image", ...)`），并跑 `tests/test_vector.py`。PDF 不得写入时间戳等非确定内容。
+
+10. **稿纸网格是排版与画线的唯一来源**。`paper.grid(cfg)` 给出行距、首条线、格子；`Renderer.layout` 按它把行高取整到行距、`paginate` / `render_page` 从 `grid.top` 排到 `grid.bottom`，一字一格只看 `grid.align`（`cell_snap` 关闭时为 0），字数格模式下 `Renderer` 用 `paper.fit_body` 改写正文字号，`paper.rules` 按同一网格画线，矢量 PDF 复用同一组 `Rule`。`plain` 样式必须与旧输出逐字节一致（`tests/test_paper.py::test_plain_preset_matches_the_default_page`）；画线不得消耗 `state.np_rng`。
 
 ## 测试约定
 

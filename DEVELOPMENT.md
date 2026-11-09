@@ -39,6 +39,7 @@ handnote/
   opentype.py     GSUB 读写：rand / calt 变体
   symbols.py      模板生成、cv2 描摹、assemble_font、merge_fonts
   capture.py      浏览器笔画 JSON 校验、光栅化、build_capture_font
+  paper.py        稿纸：预设、行线网格 Grid、画线、扫描纸校正与行距检测
   fonts.py        字体缓存目录与下载源
   cli.py          命令行入口（python -m handnote）
   webui/          stdlib HTTP 服务 + 原生 JS 页面（无构建步骤）
@@ -112,6 +113,11 @@ symbols template ──▶ PDF + spec.json
 | `GET /api/guide-font` | 采集页用的描红字体（按字符子集化） |
 | `POST /api/symbols/capture` | 提交笔画 JSON，构建并可选合并、替换 |
 | `GET /api/font-file/<name>` | 下载构建好的字体 |
+
+| `POST /api/paper/scan`、`GET /api/paper/raw/<id>` | 上传纸张照片，返回自动识别的四角；角点编辑用的缩略图 |
+| `POST /api/paper/apply`、`GET /api/paper/file/<name>` | 按四角校正、去阴影，存为 `paper-*.png`，并检测行距 |
+
+稿纸相关路由在 `webui/paper_api.py`，`server.py` 只做转发。`/api/render` 只接受 `var/uploads/paper-*.png` 作为 `paper_image`。
 
 上传和构建产物写到当前目录的 `var/uploads/`（已在 `.gitignore`）。
 

@@ -21,6 +21,7 @@
 - [Markdown 写法](#markdown-写法)
 - [用自己的笔迹](#用自己的笔迹)
 - [多套字形](#多套字形)
+- [稿纸](#稿纸)
 - [参数](#参数)
 - [配合 AI 答题 agent](#配合-ai-答题-agent)
 - [常见问题](#常见问题)
@@ -110,12 +111,13 @@ python -m handnote analyze notes.md
 python -m handnote serve            # http://127.0.0.1:8765/
 ```
 
-界面分三栏：
+界面分四栏：
 
 | 栏 | 用途 |
 |---|---|
 | 内容 | 粘贴或导入 Markdown，右侧实时预览，可下载 PDF（矢量或位图，见“参数”栏的“矢量 PDF”） |
 | 参数 | 字号、行距、字距、抖动、纸张等滑块；可切换字体，包括你合并出的手写字体 |
+| 纸张 | 稿纸预设（横线、方格、点阵、作文格、田字格等）、颜色与行线调整、扫描导入自己的纸 |
 | 符号页 | 下载打印模板、上传扫描件构建字体 |
 
 缺字报告会直接列在预览旁边，点一下就跳到符号页。浏览器手写采集页在 `http://127.0.0.1:8765/capture`。
@@ -192,6 +194,38 @@ python -m handnote symbols build scan-1.png scan-2.png scan-3.png \
 
 Web 界面的“符号页”栏可以完成同样的操作：下载模板、上传扫描图、勾选合并与替换。
 
+## 稿纸
+
+页面背景可以是白纸、印好的稿纸，或者你自己拍的纸。
+
+**预设**：白纸、横线本、红边线横线本、护眼黄横线、方格本、点阵本、400 字稿纸、800 字稿纸、田字格、牛皮纸。Web 界面在“纸张”栏点一下即可；命令行用 `--paper`：
+
+```bash
+python -m handnote paper presets                        # 列出预设
+python -m handnote render notes.md --paper tianzi -o out/notes.pdf
+```
+
+- 横线、方格、点阵纸上，每一行的基线都落在线上：行距默认跟随正文行距，标题、公式块会占整数行。
+- **对齐格子**（可选，默认开）：作文格、田字格、方格纸上一字一格，汉字和全角标点各占一格，英文字母、数字两个一格，标题字号不超过格子。关掉后格子照画，文字按正常字距排。方格纸开启时，每行文字占整数个方格。
+- **字数格**：作文格和田字格可以按经典稿纸排格——300 字（20×15）、400 字（20×20）、500 字（25×20）、600 字（20×30）、800 字（25×32），或自定义每行格数和每页行数。格子铺满版心，正文字号随格子大小自动调整；右侧每满 100 字标一次累计字数（跨页接着数），左下角印“20×20=400”这样的格数，可关闭。
+- 预设之后可以手动调：纸色、线色、线条浓度、线宽、行距、首条线位置、格子边长、页边距、红色边线，以及是否让文字对齐行线（`paper_snap`）。
+
+**扫描导入**：拍一张空白的纸（横线本、信纸都行），在“纸张”栏选择照片：
+
+1. 自动找出纸的四个角，可以拖动圆点微调，或者用“整张图”。
+2. 应用时按页面尺寸做透视校正，去掉阴影和不均匀的光线，并提亮纸色（两者都可调，也可以转灰度）。
+3. 纸上有规则横线时自动测出行距和第一条线的位置，文字会写在线上；测不准时在上面手动改“行距”“首条线位置”。
+
+命令行等价操作：
+
+```bash
+python -m handnote paper scan photo.jpg -o out/paper.png      # 输出要加的 --set 参数
+python -m handnote render notes.md -o out/notes.pdf \
+  --set paper_style=image --set paper_image=out/paper.png --set rule_pitch=52.1 --set rule_top=124.6
+```
+
+矢量 PDF 里，印刷的线条是矢量；扫描的纸以 JPEG 嵌入作为底图。
+
 ## 多套字形
 
 真人写同一个字，每次都不一样。handnote 每画一个字就随机选一套字形，同一个字不会连续两次用同一套。字形来源有两种：
@@ -230,6 +264,16 @@ python -m handnote render notes.md -o out/a.pdf --set glyph_sets=1     # 关闭�
 | `ink_alpha_min` / `ink_alpha_max` | 238 / 255 | 墨色深浅范围 |
 | `math_scale` / `display_size` | 1.12 / 36 | 行内公式相对正文的比例、居中公式字号 |
 | `paper_noise` / `paper_gradient` | 1.6 / 3.0 | 纸张颗粒与纵向渐变 |
+| `paper_style` | plain | 稿纸样式：`plain` `lined` `grid` `dots` `essay` `tianzi` `image` |
+| `paper_color` / `rule_color` | 空 / #7fa3cf | 纸色（空为 `paper_base` 灰白）、线色 |
+| `rule_alpha` / `rule_width` | 150 / 1.3 | 线条浓度（0–255）、线宽（px） |
+| `rule_pitch` / `rule_top` | 0 / 0 | 行距与第一条线的 y（px）；0 为自动（跟随正文行距和上边距） |
+| `cell_size` | 0 | 作文格、田字格的格子边长，方格、点阵的间距；0 为自动 |
+| `margin_rule` / `paper_snap` | false / true | 红色边线；文字基线对齐行线 |
+| `cell_snap` | true | 作文格、田字格、方格纸上一字一格 |
+| `grid_cols` / `grid_rows` | 0 / 0 | 作文格、田字格每行格数和每页行数（如 20 / 20 为 400 字稿纸）；0 为按字号排格 |
+| `count_marks` | true | 字数格的累计字数标记和格数页脚 |
+| `paper_image` | 空 | `image` 样式用的纸张图片（`handnote paper scan` 的输出） |
 | `glyph_sets` / `glyph_strength` | 4 / 1.0 | 字形套数（1 为关闭）、合成套之间的差异幅度 |
 | `seed` | 11 | 随机种子；同一种子、同一输入的输出逐字节一致 |
 | `dpi` | 150 | 页面像素与物理尺寸的换算（150 时默认页面为 A4） |
