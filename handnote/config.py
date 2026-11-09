@@ -7,6 +7,7 @@ from dataclasses import dataclass, fields
 from typing import Any
 
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
+_PAPER_STYLES = ("plain", "lined", "grid", "dots", "essay", "tianzi", "image")
 
 #: Bounds used by :meth:`RenderConfig.validate`. ``key`` -> ``(low, high)``.
 _LIMITS: dict[str, tuple[float, float]] = {
@@ -31,6 +32,13 @@ _LIMITS: dict[str, tuple[float, float]] = {
     "paper_base": (0, 255),
     "paper_noise": (0.0, 40.0),
     "paper_gradient": (0.0, 60.0),
+    "rule_alpha": (0, 255),
+    "rule_width": (0.2, 8.0),
+    "rule_pitch": (0.0, 600.0),
+    "rule_top": (0.0, 8000.0),
+    "cell_size": (0.0, 400.0),
+    "grid_cols": (0, 60),
+    "grid_rows": (0, 80),
     "seed": (0, 2**31 - 1),
     "dpi": (60, 600),
     "matrix_gap": (0.0, 3.0),
@@ -76,6 +84,22 @@ class RenderConfig:
     paper_base: int = 250
     paper_noise: float = 1.6
     paper_gradient: float = 3.0
+    # Paper style (see handnote.paper): presets fill these together.
+    paper_style: str = "plain"
+    paper_color: str = ""
+    rule_color: str = "#7fa3cf"
+    rule_alpha: int = 150
+    rule_width: float = 1.3
+    rule_pitch: float = 0.0
+    rule_top: float = 0.0
+    cell_size: float = 0.0
+    margin_rule: bool = False
+    paper_snap: bool = True
+    cell_snap: bool = True
+    grid_cols: int = 0
+    grid_rows: int = 0
+    count_marks: bool = True
+    paper_image: str = ""
     page_numbers: bool = True
     matrix_gap: float = 0.9
     char_spacing: float = 0.12
@@ -87,6 +111,7 @@ class RenderConfig:
     glyph_strength: float = 1.0
     seed: int = 11
     dpi: int = 150
+    vector_pdf: bool = True
 
     # -- construction -----------------------------------------------------
     @classmethod
@@ -119,6 +144,14 @@ class RenderConfig:
             self.ink_alpha_min, self.ink_alpha_max = self.ink_alpha_max, self.ink_alpha_min
         if not _HEX_RE.match(self.ink):
             raise ValueError(f"ink must be a #rrggbb colour, got {self.ink!r}")
+        if not _HEX_RE.match(self.rule_color):
+            raise ValueError(f"rule_color must be a #rrggbb colour, got {self.rule_color!r}")
+        if self.paper_color and not _HEX_RE.match(self.paper_color):
+            raise ValueError(f"paper_color must be empty or #rrggbb, got {self.paper_color!r}")
+        if self.paper_style not in _PAPER_STYLES:
+            raise ValueError(f"paper_style must be one of {', '.join(_PAPER_STYLES)}")
+        if 0 < self.rule_pitch < 8:
+            self.rule_pitch = 8.0
         if not self.font_path:
             raise ValueError("font_path is required")
         if self.page_width - 2 * self.margin_x < 120:
@@ -142,9 +175,10 @@ class RenderConfig:
 
 
 def _coerce(key: str, value: Any) -> Any:
-    if key in ("font_path", "ink"):
-        return str(value)
-    if key == "paper" or key == "page_numbers":
+    if key in ("font_path", "ink", "paper_style", "paper_color", "rule_color", "paper_image"):
+        return str(value).strip()
+    if key in ("paper", "page_numbers", "vector_pdf", "margin_rule", "paper_snap",
+               "cell_snap", "count_marks"):
         if isinstance(value, str):
             return value.strip().lower() not in ("", "0", "false", "no", "off")
         return bool(value)
@@ -152,6 +186,7 @@ def _coerce(key: str, value: Any) -> Any:
         return int(value)
     if key in ("page_width", "page_height", "margin_x", "margin_top", "margin_bottom",
                "body_size", "h1_size", "h2_size", "h3_size", "ink_alpha_min",
-               "ink_alpha_max", "display_size", "paper_base", "seed", "dpi", "glyph_sets"):
+               "ink_alpha_max", "display_size", "paper_base", "seed", "dpi", "glyph_sets",
+               "rule_alpha", "grid_cols", "grid_rows"):
         return int(round(float(value)))
     return float(value)

@@ -48,3 +48,10 @@ def test_glyph_sets_clamped(font_path):
                                      "glyph_strength": -1})
     assert cfg.glyph_sets == 8
     assert cfg.glyph_strength == 0.0
+
+
+def test_vector_pdf_flag_parses_strings(font_path):
+    assert RenderConfig.from_mapping({"font_path": str(font_path)}).vector_pdf is True
+    for text, expected in (("false", False), ("0", False), ("on", True)):
+        cfg = RenderConfig.from_mapping({"font_path": str(font_path), "vector_pdf": text})
+        assert cfg.vector_pdf is expected

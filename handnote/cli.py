@@ -32,34 +32,59 @@ def _overrides(pairs: list[str]) -> dict:
     return data
 
 
+def _source(path: str) -> str:
+    """Markdown text of ``path``: a Markdown file, a Word .docx, or ``-`` for stdin."""
+    if path == "-":
+        return sys.stdin.read()
+    if Path(path).suffix.lower() in (".docx", ".doc"):
+        from .docx import docx_to_markdown
+
+        result = docx_to_markdown(Path(path).read_bytes())
+        for note in result.warnings:
+            print(f"note: {note}", file=sys.stderr)
+        return result.markdown
+    return Path(path).read_text(encoding="utf-8")
+
+
 def _config(args: argparse.Namespace) -> RenderConfig:
-    data = _overrides(getattr(args, "set", []) or [])
+    data: dict[str, object] = {}
+    if getattr(args, "paper", None):
+        from .paper import preset
+
+        data.update(preset(args.paper))
+    data.update(_overrides(getattr(args, "set", []) or []))
     data.setdefault("font_path", str(resolve_font(getattr(args, "font", None))))
     return RenderConfig.from_mapping(data)
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    source = Path(args.input).read_text(encoding="utf-8") if args.input != "-" else sys.stdin.read()
+    source = _source(args.input)
     cfg = _config(args)
     renderer = Renderer(cfg)
     blocks = parse(source)
-    images = renderer.render(blocks)
     out = Path(args.out or "out/handnote.pdf")
     out.parent.mkdir(parents=True, exist_ok=True)
-    if out.suffix.lower() == ".pdf":
-        out.write_bytes(renderer.to_pdf(images))
-    elif len(images) == 1 and out.suffix.lower() in (".png", ".jpg", ".jpeg"):
-        images[0].convert("RGB").save(out)
+    suffix = out.suffix.lower()
+    if suffix == ".pdf" and cfg.vector_pdf:
+        # Vector pages are recorded directly; no page images are needed.
+        pages: list = renderer.render_vector(blocks)
+        out.write_bytes(renderer.to_vector_pdf(pages))
     else:
-        if out.suffix:
-            out = out.with_suffix("")
-        out.mkdir(parents=True, exist_ok=True)
-        for i, image in enumerate(images, 1):
-            image.convert("RGB").save(out / f"page-{i}.png")
+        pages = renderer.render(blocks)
+        if suffix == ".pdf":
+            out.write_bytes(renderer.to_pdf(pages))
+        elif len(pages) == 1 and suffix in (".png", ".jpg", ".jpeg"):
+            pages[0].convert("RGB").save(out)
+        else:
+            if out.suffix:
+                out = out.with_suffix("")
+            out.mkdir(parents=True, exist_ok=True)
+            for i, image in enumerate(pages, 1):
+                image.convert("RGB").save(out / f"page-{i}.png")
     report = renderer.coverage(blocks)
     summary = {
         "out": str(out),
-        "pages": len(images),
+        "pages": len(pages),
         "font": str(renderer.font_path),
         "coverage": report["coverage"],
         "missing": "".join(item["char"] for item in report["missing"]),
@@ -70,7 +95,7 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
-    source = Path(args.input).read_text(encoding="utf-8") if args.input != "-" else sys.stdin.read()
+    source = _source(args.input)
     cfg = _config(args)
     renderer = Renderer(cfg)
     report = renderer.coverage(parse(source))
@@ -141,7 +166,8 @@ def cmd_symbols_capture(args: argparse.Namespace) -> int:
         data = data["capture"]
     out = Path(args.out)
     raw = out.with_name(f"{out.stem}-symbols.ttf") if args.merge else out
-    report = build_capture_font(data, spec, raw, size=args.size, keep=args.keep)
+    report = build_capture_font(data, spec, raw, size=args.size, keep=args.keep,
+                                pressure=args.pressure)
     if args.merge and report["glyphs"]:
         merged = merge_fonts(args.merge, raw, out, replace=args.replace)
         report["merged_into"] = args.merge
@@ -159,6 +185,122 @@ def cmd_fonts(args: argparse.Namespace) -> int:
             print(ensure_font(key))
         return 0
     print(json.dumps(list_fonts(), ensure_ascii=False, indent=1))
+    return 0
+
+
+def _read_json(path: str) -> dict:
+    text = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+    return json.loads(text)
+
+
+def _targets(spec: str) -> str:
+    from .hanzi_data import gb2312_level1
+
+    if spec == "gb1":
+        return "".join(gb2312_level1())
+    return Path(spec).read_text(encoding="utf-8")
+
+
+def cmd_hanzi(args: argparse.Namespace) -> int:
+    from . import hanzi_data
+    from .hanzi_font import build_hanzi_font
+
+    command = args.hanzi_command
+    if command == "fetch":
+        print(hanzi_data.fetch(force=args.force))
+        return 0
+    if command == "build":
+        out = Path(args.out)
+        raw = out.with_name(out.stem + "-hanzi.ttf") if args.merge else out
+        report = build_hanzi_font(_read_json(args.capture), raw, pressure=args.pressure)
+        if args.merge and report["glyphs"]:
+            merged = merge_fonts(args.merge, raw, out, replace=args.replace,
+                                 family_suffix=" Hand")
+            report.update(merged_into=args.merge, merged_added=merged["added"],
+                          merged_replaced=merged["replaced"], font=str(out))
+        report.pop("chars", None)
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        return 0 if report["glyphs"] else 1
+
+    from .model import torch_available
+
+    if not torch_available():
+        raise SystemExit("this command needs the model extra: pip install -e \".[model]\" "
+                         "--extra-index-url https://download.pytorch.org/whl/cpu")
+    from .model import weights
+
+    def show(info: dict) -> None:
+        print(json.dumps(info, ensure_ascii=False), file=sys.stderr, flush=True)
+
+    if command == "model-fetch":
+        def fetched(what: str, done: int, total: int) -> None:
+            if what == "content" or done == total or done % (32 << 20) < (1 << 20):
+                show({"file": what, "done": done, "total": total})
+
+        hanzi_data.fetch()
+        print(json.dumps(weights.fetch(fetched), ensure_ascii=False, indent=1))
+        return 0
+    if command == "train":
+        from .model.train import finetune
+
+        def trained(info: dict) -> None:
+            if info["iter"] % 25 == 0 or info["iter"] == info["iters"]:
+                show({k: round(v, 3) if isinstance(v, float) else v for k, v in info.items()})
+
+        report = finetune(_read_json(args.capture), args.out, iters=args.iters, progress=trained)
+        report.pop("log", None)
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        return 0
+    from .model.generate import generate
+
+    out = Path(args.out)
+    result = generate(_read_json(args.capture), args.model, _targets(args.targets),
+                      sets=args.sets, cache_path=out.with_suffix(".partial.json"),
+                      progress=lambda info: show(info) if info["done"] % 64 < 16 else None)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result["capture"], ensure_ascii=False), encoding="utf-8")
+    print(json.dumps({"out": str(out), **result["report"]}, ensure_ascii=False, indent=1))
+    return 0
+
+
+def cmd_paper(args: argparse.Namespace) -> int:
+    """Turn a photo of blank paper into a page background and measure its lines."""
+    from PIL import Image
+
+    from .paper import PRESETS, detect_page, detect_rules, flatten_scan
+
+    if args.paper_command == "presets":
+        for key, (label, fields) in PRESETS.items():
+            print(f"{key:14s} {label}  {fields.get('paper_style', 'plain')}")
+        return 0
+    with Image.open(args.image) as img:
+        img = img.convert("RGB")
+        corners = (json.loads(args.corners) if args.corners else detect_page(img))
+        sheet = flatten_scan(img, corners, (args.width, args.height),
+                             evenness=args.evenness, whiten=args.whiten, gray=args.gray)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(out)
+    rules = detect_rules(sheet)
+    report = {"out": str(out), "corners": corners, "rules": rules,
+              "set": ["paper_style=image", f"paper_image={out}"]}
+    if rules:
+        report["set"] += [f"rule_pitch={rules['pitch']}", f"rule_top={rules['top']}"]
+    print(json.dumps(report, ensure_ascii=False, indent=1))
+    return 0
+
+
+def cmd_docx(args: argparse.Namespace) -> int:
+    from .docx import docx_to_markdown
+
+    result = docx_to_markdown(Path(args.input).read_bytes())
+    for note in result.warnings:
+        print(f"note: {note}", file=sys.stderr)
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(result.markdown, encoding="utf-8")
+    else:
+        sys.stdout.write(result.markdown)
     return 0
 
 
@@ -183,14 +325,16 @@ def build_parser() -> argparse.ArgumentParser:
                        help="override any RenderConfig field")
 
     r = sub.add_parser("render", help="render Markdown to PNG or PDF")
-    r.add_argument("input", help="Markdown file, or - for stdin")
+    r.add_argument("input", help="Markdown or Word (.docx) file, or - for stdin")
     r.add_argument("-o", "--out", default="out/handnote.pdf",
                    help="output .pdf, single .png, or a directory")
+    r.add_argument("--paper", metavar="PRESET",
+                   help="paper preset (see `handnote paper presets`); --set overrides it")
     add_common(r)
     r.set_defaults(func=cmd_render)
 
     a = sub.add_parser("analyze", help="report glyphs missing from the font")
-    a.add_argument("input", help="Markdown file, or - for stdin")
+    a.add_argument("input", help="Markdown or Word (.docx) file, or - for stdin")
     add_common(a)
     a.set_defaults(func=cmd_analyze)
 
@@ -235,6 +379,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="share of size/position error kept after aligning to the guide")
     sc.add_argument("--replace", action="store_true",
                     help="with --merge: handwritten glyphs replace the base font's own")
+    sc.add_argument("--pressure", type=float, default=1.0,
+                    help="pen pressure gain: 0 = uniform width, 1 = default, 2 = strong")
     sc.set_defaults(func=cmd_symbols_capture)
 
     ss = ssub.add_parser("simulate", help="fill a template with a font for testing")
@@ -247,6 +393,54 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("action", choices=["list", "fetch"], nargs="?", default="list")
     f.add_argument("names", nargs="*", help=f"font keys: {', '.join(SOURCES)}")
     f.set_defaults(func=cmd_fonts)
+
+    h = sub.add_parser("hanzi", help="handwritten Chinese characters (fine-tuned SDT model)")
+    hsub = h.add_subparsers(dest="hanzi_command", required=True)
+    hf = hsub.add_parser("fetch", help="download stroke data for the trace guide (makemeahanzi)")
+    hf.add_argument("--force", action="store_true", help="download again")
+    hm = hsub.add_parser("model-fetch", help="download the SDT weights and content glyphs")
+    ht = hsub.add_parser("train", help="fine-tune SDT on a hanzi capture (CPU, ~20 min)")
+    ht.add_argument("capture", help="hanzi capture JSON from /hanzi, or - for stdin")
+    ht.add_argument("-o", "--out", default="out/hanzi-model.pth")
+    ht.add_argument("--iters", type=int, default=300, help="training steps (~3.5 s each)")
+    hg = hsub.add_parser("generate", help="write characters with a fine-tuned model")
+    hg.add_argument("capture", help="the capture the model was trained on")
+    hg.add_argument("--model", required=True, help="model from `hanzi train`")
+    hg.add_argument("-o", "--out", default="out/hanzi-generated.json")
+    hg.add_argument("--targets", default="gb1",
+                    help="gb1 (GB2312 level 1, 3755 chars) or a text file whose characters "
+                         "to write (e.g. your notes)")
+    hg.add_argument("--sets", type=int, default=1, help="variants per character (1-8)")
+    hb = hsub.add_parser("build", help="build a font from a hanzi capture or generated JSON")
+    hb.add_argument("capture", help="hanzi JSON, or - for stdin")
+    hb.add_argument("-o", "--out", default="out/handnote-hanzi.ttf")
+    hb.add_argument("--merge", metavar="BASE_FONT",
+                    help="merge into a base font (glyf-based), e.g. ZhiMangXing")
+    hb.add_argument("--replace", action="store_true",
+                    help="with --merge: replace the base font's own glyphs for these characters")
+    hb.add_argument("--pressure", type=float, default=1.0,
+                    help="pen pressure gain: 0 = uniform width, 1 = default, 2 = strong")
+    for p in (hf, hm, ht, hg, hb):
+        p.set_defaults(func=cmd_hanzi)
+
+    pa = sub.add_parser("paper", help="paper presets and scanned paper backgrounds")
+    pasub = pa.add_subparsers(dest="paper_command", required=True)
+    pasub.add_parser("presets", help="list paper presets")
+    ps = pasub.add_parser("scan", help="flatten a photo of blank paper into a background")
+    ps.add_argument("image", help="photo or scan of the paper")
+    ps.add_argument("-o", "--out", default="out/paper.png")
+    ps.add_argument("--width", type=int, default=1240, help="page width in pixels")
+    ps.add_argument("--height", type=int, default=1754, help="page height in pixels")
+    ps.add_argument("--corners", help="JSON [[x,y]*4] clockwise from top-left (default: detect)")
+    ps.add_argument("--evenness", type=float, default=0.8, help="0-1, remove uneven light")
+    ps.add_argument("--whiten", type=float, default=0.6, help="0-1, brighten the paper")
+    ps.add_argument("--gray", action="store_true", help="drop the colour")
+    pa.set_defaults(func=cmd_paper)
+
+    d = sub.add_parser("docx", help="convert a Word .docx into handnote Markdown")
+    d.add_argument("input", help=".docx file")
+    d.add_argument("-o", "--out", help="output .md (default: stdout)")
+    d.set_defaults(func=cmd_docx)
 
     w = sub.add_parser("serve", help="start the local web UI")
     w.add_argument("--host", default="127.0.0.1")

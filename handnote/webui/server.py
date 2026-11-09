@@ -21,8 +21,10 @@ from ..capture import build_capture_font
 from ..config import RenderConfig
 from ..fonts import list_fonts, resolve_font
 from ..markdown import ParseError, parse
+from ..paper import presets as paper_presets
 from ..render import Renderer
 from ..symbols import SYMBOL_GROUPS, Template, all_symbols, build_font, build_template, merge_fonts
+from . import hanzi_api, paper_api
 
 WEBUI_DIR = Path(__file__).parent
 UPLOAD_DIR = Path.cwd() / "var" / "uploads"
@@ -105,6 +107,13 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/capture", "/capture.html"):
                 return self._send(200, (WEBUI_DIR / "capture.html").read_bytes(),
                                   _MIME[".html"])
+            if path in ("/hanzi", "/hanzi.html"):
+                return self._send(200, (WEBUI_DIR / "hanzi.html").read_bytes(),
+                                  _MIME[".html"])
+            if path.startswith("/api/hanzi/") and hanzi_api.handle_get(self, path, query):
+                return None
+            if path.startswith("/api/paper/") and paper_api.handle_get(self, path):
+                return None
             if path.startswith("/static/"):
                 return self._static(path[len("/static/"):])
             if path == "/api/guide-font":
@@ -161,6 +170,7 @@ class Handler(BaseHTTPRequestHandler):
             "groups": SYMBOL_GROUPS,
             "symbols": all_symbols(),
             "sample": SAMPLE_MARKDOWN,
+            "paper_presets": paper_presets(),
         }
 
     def _preview(self, path: str) -> None:
@@ -186,7 +196,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error("preview expired", 404)
         if not entry.get("pdf"):
             renderer = Renderer(entry["config"])
-            entry["pdf"] = renderer.to_pdf(entry["images"])
+            entry["pdf"] = renderer.pdf(entry["blocks"], entry["images"])
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
         self.send_header("Content-Length", str(len(entry["pdf"])))
@@ -236,6 +246,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._symbol_build()
             if path == "/api/symbols/capture":
                 return self._symbol_capture()
+            if path.startswith("/api/hanzi/") and hanzi_api.handle_post(self, path):
+                return None
+            if path.startswith("/api/paper/") and paper_api.handle_post(self, path):
+                return None
             return self._error("not found", 404)
         except (ValueError, ParseError) as exc:
             return self._error(f"{type(exc).__name__}: {exc}", 400)
@@ -255,6 +269,12 @@ class Handler(BaseHTTPRequestHandler):
         data.setdefault("font_path", "")
         if not data["font_path"]:
             data["font_path"] = str(resolve_font(""))
+        image = str(data.get("paper_image") or "")
+        if image:
+            # Only sheets processed by /api/paper/apply may be read from disk.
+            target = Path(image).resolve()
+            if target.parent != UPLOAD_DIR.resolve() or not target.name.startswith("paper-"):
+                raise ValueError("paper_image must be a sheet uploaded through the paper tab")
         return RenderConfig.from_mapping(data)
 
     def _render(self) -> None:
@@ -266,8 +286,9 @@ class Handler(BaseHTTPRequestHandler):
         renderer = Renderer(cfg)
         images = renderer.render(blocks)
         elapsed = time.time() - started
-        pdf = renderer.to_pdf(images) if payload.get("pdf") else None
-        key = STORE.put_preview({"images": images, "pdf": pdf, "config": cfg})
+        pdf = renderer.pdf(blocks, images) if payload.get("pdf") else None
+        key = STORE.put_preview({"images": images, "blocks": blocks, "pdf": pdf,
+                                 "config": cfg})
         report = renderer.coverage(blocks)
         return self._json({
             "id": key,
@@ -297,8 +318,18 @@ class Handler(BaseHTTPRequestHandler):
         part = parts[0]
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         if kind == "markdown":
+            name = (part.filename or "").lower()
+            if name.endswith((".docx", ".doc")) or part.data[:2] == b"PK":
+                from ..docx import DocxError, docx_to_markdown
+
+                try:
+                    result = docx_to_markdown(part.data)
+                except DocxError as exc:
+                    return self._error(str(exc))
+                return self._json({"text": result.markdown, "filename": part.filename,
+                                   "warnings": result.warnings})
             text = part.data.decode("utf-8", errors="replace")
-            return self._json({"text": text, "filename": part.filename})
+            return self._json({"text": text, "filename": part.filename, "warnings": []})
         suffix = Path(part.filename or "upload.bin").suffix.lower()
         allowed = ({".ttf", ".otf", ".ttc"} if kind == "font"
                    else {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".json", ".pdf"})
@@ -363,8 +394,10 @@ class Handler(BaseHTTPRequestHandler):
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         out = UPLOAD_DIR / f"capture-{uuid.uuid4().hex[:8]}.ttf"
         keep = payload.get("keep")
+        pressure = payload.get("pressure")
         report = build_capture_font(capture, spec, out,
-                                    keep=0.3 if keep is None else float(keep))
+                                    keep=0.3 if keep is None else float(keep),
+                                    pressure=1.0 if pressure is None else float(pressure))
         merge_into = payload.get("merge")
         if merge_into is False:
             merge_into = ""

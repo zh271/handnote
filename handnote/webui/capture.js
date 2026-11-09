@@ -62,6 +62,7 @@ async function boot() {
   $("keep").addEventListener("input", () => {
     $("keep-out").textContent = Number($("keep").value).toFixed(2);
   });
+  pen.bind($("pressure"), $("pressure-out"), $("simulate"), redrawAll);
   $("undo").addEventListener("click", undo);
   $("fab-undo").addEventListener("click", undo);
   $("zoom-open").addEventListener("click", () => openZoom());
@@ -146,19 +147,16 @@ function newCanvas(size) {
 /** Wire pointer drawing on a surface; ``target()`` names the set and cell. */
 function attachDrawing(surface, target) {
   const { canvas } = surface;
-  const pointOf = (event) => {
+  const pointOf = (event, drawing = null) => {
     const rect = canvas.getBoundingClientRect();
-    const pressure = event.pressure > 0 ? event.pressure : 0.5;
-    return [
-      Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
-      Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
-      Math.min(1, Math.max(0, pressure)),
-    ];
+    const u = Math.min(1, Math.max(0, (event.clientX - rect.left) / (rect.width || 1)));
+    const v = Math.min(1, Math.max(0, (event.clientY - rect.top) / (rect.height || 1)));
+    return [u, v, pen.pressure(event, u, v, drawing)];
   };
   const finish = (event) => {
     const drawing = state.drawing;
     if (!drawing || drawing.surface !== surface) return;
-    drawing.points.push(pointOf(event));
+    drawing.points.push(pointOf(event, drawing));
     state.drawing = null;
     addStroke(drawing.set, drawing.index, { points: drawing.points });
   };
@@ -168,17 +166,18 @@ function attachDrawing(surface, target) {
     canvas.setPointerCapture(event.pointerId);
     const { set, index } = target();
     const point = pointOf(event);
-    state.drawing = { surface, set, index, points: [point] };
+    state.drawing = { surface, set, index, points: [point], t: event.timeStamp };
     dot(surface, point);
   });
   canvas.addEventListener("pointermove", (event) => {
     const drawing = state.drawing;
     if (!drawing || drawing.surface !== surface) return;
     event.preventDefault();
-    const point = pointOf(event);
+    const point = pointOf(event, drawing);
     const last = drawing.points[drawing.points.length - 1];
     if (Math.hypot(point[0] - last[0], point[1] - last[1]) < 0.003) return;
     drawing.points.push(point);
+    drawing.t = event.timeStamp;
     segment(surface, last, point);
   });
   canvas.addEventListener("pointerup", finish);
@@ -188,13 +187,14 @@ function attachDrawing(surface, target) {
 function dot(surface, point) {
   const { ctx, size } = surface;
   ctx.beginPath();
-  ctx.arc(point[0] * size, point[1] * size, Math.max(1, state.width * size / 2), 0, Math.PI * 2);
+  const radius = (state.width * size * pen.scale(point[2])) / 2;
+  ctx.arc(point[0] * size, point[1] * size, Math.max(1, radius), 0, Math.PI * 2);
   ctx.fill();
 }
 
 function segment(surface, from, to) {
   const { ctx, size } = surface;
-  ctx.lineWidth = Math.max(1, state.width * size);
+  ctx.lineWidth = Math.max(1, state.width * size * pen.scale((from[2] + to[2]) / 2));
   ctx.beginPath();
   ctx.moveTo(from[0] * size, from[1] * size);
   ctx.lineTo(to[0] * size, to[1] * size);
@@ -818,6 +818,7 @@ async function buildFont() {
         merge: $("merge").checked,
         replace: $("replace").checked,
         keep: Number($("keep").value),
+        pressure: pen.gain,
       }),
     });
     const data = await res.json();

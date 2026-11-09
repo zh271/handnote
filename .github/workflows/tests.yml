@@ -38,3 +38,31 @@ jobs:
           exit 1
       - name: Test
         run: python -m pytest -q
+
+  model:
+    # The optional handwritten-hanzi model: CPU torch, random weights, no downloads.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: System libraries for opencv
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-0
+      - name: Install
+        run: pip install -e ".[test,model]" --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Cache fonts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/handnote/fonts
+          key: handnote-fonts-zhimang-v1
+      - name: Fetch handwriting font
+        run: |
+          for i in 1 2 3 4 5; do
+            python -m handnote fonts fetch zhimang && exit 0
+            echo "download failed, retry $i"; sleep $((i * 10))
+          done
+          exit 1
+      - name: Test
+        run: python -m pytest -q tests/test_model.py tests/test_model_numpy.py tests/test_hanzi_font.py tests/test_webui.py

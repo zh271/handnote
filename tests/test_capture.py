@@ -114,3 +114,24 @@ def test_capture_json_round_trip(spec, tmp_path):
     again = json.loads(path.read_text(encoding="utf-8"))
     report = build_capture_font(again, spec, tmp_path / "c.ttf")
     assert report["glyphs"] == 1
+
+
+def test_pressure_varies_width_along_the_stroke():
+    import numpy as np
+
+    from handnote.capture import pressure_scale, rasterize_strokes
+
+    ramp = [(0.1 + 0.8 * t / 40, 0.5, t / 40) for t in range(41)]
+    img = rasterize_strokes([(ramp, 0.08)], 256)
+    ink = img < 128
+    light, heavy = ink[:, 40:110].sum(axis=0).mean(), ink[:, 150:220].sum(axis=0).mean()
+    assert heavy > light * 1.3  # thicker where the pen pressed harder
+
+    flat = rasterize_strokes([(ramp, 0.08)], 256, pressure=0.0)
+    cols = (flat < 128)[:, 40:220].sum(axis=0)
+    assert cols.max() - cols.min() <= 2  # gain 0: uniform width
+
+    even = [(u, v, 0.5) for u, v, _ in ramp]
+    assert np.array_equal(rasterize_strokes([(even, 0.08)], 256, pressure=0.0),
+                          rasterize_strokes([(even, 0.08)], 256, pressure=2.0))
+    assert pressure_scale(0.5) == 1.0 and pressure_scale(0.0, 2.0) == 0.4

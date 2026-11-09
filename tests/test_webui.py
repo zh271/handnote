@@ -90,6 +90,7 @@ def test_render_and_preview(server):
 
     status, headers, pdf = _request(server, data["pdf"])
     assert status == 200 and pdf.startswith(b"%PDF")
+    assert b"/Subtype /Form" in pdf  # vector by default
 
 
 def test_render_rejects_bad_config(server):
@@ -115,6 +116,24 @@ def test_upload_markdown(server):
                                      headers={"Content-Type": ctype})
     assert status == 200
     assert json.loads(raw)["text"] == "# 标题"
+
+
+def test_upload_word(server):
+    from test_docx import _docx, _p
+
+    table = "<w:tbl><w:tr><w:tc>" + _p("格") + "</w:tc></w:tr></w:tbl>"
+    word = _docx(_p("标题", "Heading1") + table)
+    body, ctype = _multipart({}, [("file", "note.docx", word, "application/octet-stream")])
+    status, _headers, raw = _request(server, "/api/upload?kind=markdown", data=body,
+                                     headers={"Content-Type": ctype})
+    assert status == 200, raw
+    data = json.loads(raw)
+    assert data["text"] == "# 标题\n\n格\n" and data["warnings"] == ["1 个表格按行转成了段落"]
+    body, ctype = _multipart({}, [("file", "old.doc", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",
+                                   "application/msword")])
+    status, _headers, raw = _request(server, "/api/upload?kind=markdown", data=body,
+                                     headers={"Content-Type": ctype})
+    assert status == 400 and "另存为" in json.loads(raw)["error"]
 
 
 def test_symbol_template_json(server):
@@ -177,12 +196,13 @@ def test_capture_endpoint(server):
             {"index": by_char["∪"], "strokes": [[[0.5, 0.1], [0.5, 0.9]]]},
         ],
     }
-    payload = json.dumps({"spec": spec, "capture": capture}).encode()
+    payload = json.dumps({"spec": spec, "capture": capture, "pressure": 1.5}).encode()
     status, _headers, raw = _request(server, "/api/symbols/capture", data=payload,
                                      headers={"Content-Type": "application/json"})
     assert status == 200, raw
     report = json.loads(raw)
     assert report["glyphs"] == 2
+    assert report["pressure"] == 1.5
     assert report["merged_added"] == 2
     status, _headers, font = _request(server, report["url"])
     assert status == 200
@@ -269,3 +289,171 @@ def test_serve_opens_browser_on_bound_port(monkeypatch, capsys):
     assert len(opened) == 1 and opened[0].startswith("http://127.0.0.1:")
     assert opened[0] != f"http://127.0.0.1:{taken}/"
     assert opened[0] in capsys.readouterr().out
+
+
+def test_paper_scan_api(server):
+    import io
+
+    from test_paper import _photo
+
+    status, _headers, body = _request(server, "/api/state")
+    assert any(p["key"] == "tianzi" for p in json.loads(body)["paper_presets"])
+
+    photo, _ = _photo()
+    buffer = io.BytesIO()
+    photo.save(buffer, format="PNG")
+    data, ctype = _multipart({}, [("file", "sheet.png", buffer.getvalue(), "image/png")])
+    status, _headers, body = _request(server, "/api/paper/scan", data=data,
+                                      headers={"Content-Type": ctype})
+    assert status == 200, body
+    scan = json.loads(body)
+    assert len(scan["corners"]) == 4
+    status, headers, raw = _request(server, scan["preview"])
+    assert status == 200 and headers["Content-Type"] == "image/jpeg"
+
+    payload = json.dumps({"id": scan["id"], "corners": scan["corners"],
+                          "width": 600, "height": 840}).encode()
+    status, _headers, body = _request(server, "/api/paper/apply", data=payload,
+                                      headers={"Content-Type": "application/json"})
+    assert status == 200, body
+    applied = json.loads(body)
+    assert applied["rules"]["pitch"] > 25
+    status, _headers, png = _request(server, applied["url"])
+    assert status == 200 and png.startswith(b"\x89PNG")
+
+    config = {"paper_style": "image", "paper_image": applied["path"],
+              "rule_pitch": applied["rules"]["pitch"], "rule_top": applied["rules"]["top"]}
+    payload = json.dumps({"markdown": "第一行\n\n第二行", "config": config}).encode()
+    status, _headers, body = _request(server, "/api/render", data=payload,
+                                      headers={"Content-Type": "application/json"})
+    assert status == 200, body
+    assert not json.loads(body)["warnings"]
+
+    config["paper_image"] = __file__
+    payload = json.dumps({"markdown": "字", "config": config}).encode()
+    status, _headers, body = _request(server, "/api/render", data=payload,
+                                      headers={"Content-Type": "application/json"})
+    assert status == 400
+    assert _request(server, "/api/paper/raw/../../etc")[0] == 404
+    assert _request(server, "/api/paper/file/secret.png")[0] == 404
+
+
+@pytest.fixture
+def toy_hanzi():
+    from test_hanzi_font import toy_data
+
+    from handnote import hanzi_data
+
+    original = hanzi_data._LOADED
+    hanzi_data.set_default(toy_data())
+    yield hanzi_data._LOADED
+    hanzi_data.set_default(original)
+
+
+def _post(server, path, body):
+    status, _h, raw = _request(server, path, data=json.dumps(body).encode(),
+                               headers={"Content-Type": "application/json"})
+    return status, json.loads(raw)
+
+
+def _wait(server, job):
+    import time
+
+    for _ in range(300):
+        status = json.loads(_request(server, f"/api/hanzi/job/{job}")[2])
+        if status["state"] != "running":
+            return status
+        time.sleep(0.1)
+    raise AssertionError("job did not finish")
+
+
+def test_hanzi_page(server):
+    status, _headers, body = _request(server, "/hanzi")
+    assert status == 200
+    assert b"/static/hanzi.js" in body and b"/static/pad.js" in body
+    for name in ("hanzi.js", "pad.js", "pen.js", "hanzi.css"):
+        assert _request(server, f"/static/{name}")[0] == 200
+    assert b'href="/hanzi"' in _request(server, "/")[2]
+    assert b'href="/hanzi"' in _request(server, "/capture")[2]
+
+
+def test_hanzi_guide_and_check(server, toy_hanzi):
+    from test_hanzi_font import capture_of
+
+    status = json.loads(_request(server, "/api/hanzi/status")[2])
+    assert status["available"] and len(status["recommended"]) == 100
+    info = json.loads(_request(server, "/api/hanzi/char?c=%E6%B1%9F")[2])["江"]
+    assert info["strokes"] == 6 and len(info["medians"]) == 6
+    first = capture_of(toy_hanzi, "江")["chars"][0]
+    code, result = _post(server, "/api/hanzi/check", {"char": "江", "strokes": first["strokes"]})
+    assert code == 200 and result["ok"]
+    code, result = _post(server, "/api/hanzi/check",
+                         {"char": "江", "strokes": first["strokes"][:2]})
+    assert not result["ok"] and "标准 6 笔" in result["reason"]
+
+
+def test_hanzi_model_status_without_torch(server, monkeypatch):
+    from handnote.webui import hanzi_api
+
+    monkeypatch.setattr(hanzi_api, "_torch", lambda: False)
+    code, status = _post(server, "/api/hanzi/model/status", {"capture": None})
+    assert code == 200 and status["torch"] is False and status["model"] is None
+    code, err = _post(server, "/api/hanzi/model/train",
+                      {"capture": {"chars": [{"char": "江", "strokes": [[[0, 0], [1, 1]]]}]}})
+    assert code == 400 and "pip install" in err["error"]
+
+
+def test_hanzi_model_jobs(server, toy_hanzi, monkeypatch, tmp_path):
+    """Train and generate through the API with the model calls stubbed out."""
+    pytest.importorskip("torch")
+    from test_hanzi_font import capture_of
+
+    from handnote.webui import hanzi_api
+
+    monkeypatch.setenv("HANDNOTE_CACHE", str(tmp_path))
+    monkeypatch.setattr(hanzi_api, "_torch", lambda: True)
+    capture = capture_of(toy_hanzi, "清工")
+    calls = {}
+
+    def fake_train(cap, target, iters, progress):
+        progress({"iter": iters, "iters": iters, "loss": 0.0, "val": 0.0, "eta": 0})
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"weights")
+        target.with_suffix(".json").write_text(json.dumps({"chars": 2, "iters": iters}))
+        calls["train"] = iters
+        return {"model": str(target), "chars": 2, "seconds": 0.1, "log": [], "warnings": []}
+
+    def fake_generate(cap, model, targets, sets, progress):
+        calls["generate"] = (targets, sets)
+        progress({"done": 1, "total": 1, "set": 0, "seconds": 0.1})
+        extra = capture_of(toy_hanzi, "江")["chars"]
+        return {"capture": {**cap, "chars": cap["chars"] + extra},
+                "report": {"generated": 1, "written": 2, "skipped": "", "sets": sets}}
+
+    monkeypatch.setattr(hanzi_api, "train_model", fake_train)
+    monkeypatch.setattr(hanzi_api, "generate_chars", fake_generate)
+
+    code, err = _post(server, "/api/hanzi/model/generate", {"capture": capture, "targets": "江"})
+    assert code == 400 and "训练" in err["error"]
+
+    code, started = _post(server, "/api/hanzi/model/train", {"capture": capture, "iters": 50})
+    assert code == 200
+    done = _wait(server, started["job"])
+    assert done["state"] == "done", done
+    assert "log" not in done["report"] and calls["train"] == 50
+    code, again = _post(server, "/api/hanzi/model/train", {"capture": capture})
+    assert again == {"job": None, "cached": True}
+    code, status = _post(server, "/api/hanzi/model/status", {"capture": capture})
+    assert status["model"]["chars"] == 2
+
+    code, started = _post(server, "/api/hanzi/model/generate",
+                          {"capture": capture, "targets": "江", "sets": 2, "pressure": 0})
+    assert code == 200
+    done = _wait(server, started["job"])
+    assert done["state"] == "done", done
+    report = done["report"]
+    assert calls["generate"] == ("江", 2)
+    assert report["glyphs"] == 3 and report["merged_replaced"] >= 3
+    assert _request(server, report["url"])[0] == 200
+    code, err = _post(server, "/api/hanzi/model/generate", {"capture": capture, "targets": "abc"})
+    assert code == 400
