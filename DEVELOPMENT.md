@@ -40,13 +40,14 @@ handnote/
   capture.py      浏览器笔画 JSON 校验、光栅化、build_capture_font
   fonts.py        字体缓存目录与下载源
   cli.py          命令行入口（python -m handnote）
+  update.py       start.bat 用的 git 快进自更新（仅 stdlib，退出码 3 = 已更新）
   webui/          stdlib HTTP 服务 + 原生 JS 页面（无构建步骤）
 skills/
   concise-answer/ 答题 agent 的 skill，输出受 handnote 渲染能力约束
 examples/         可直接渲染的示例 Markdown
 docs/formats.md   spec.json / capture.json / 构建报告字段
 tests/            pytest；不联网，只用缓存字体
-start.bat         Windows 一键启动脚本
+start.bat         Windows 一键启动脚本（必须 CRLF，由 .gitattributes 保证）
 ```
 
 ## 架构
@@ -89,7 +90,7 @@ symbols template ──▶ PDF + spec.json
 
 ### Web 服务
 
-`handnote/webui/server.py` 基于 `http.server`，单进程，只监听 `127.0.0.1`。matplotlib 的 rcParams 是全局状态，渲染入口用模块级锁串行化。
+`handnote/webui/server.py` 基于 `http.server`，单进程，只监听 `127.0.0.1`。`bind()` 在首选端口不可用时依次尝试后续端口，最后退到端口 0；Windows 上关闭 `SO_REUSEADDR`，否则第二个实例会静默绑定同一端口。matplotlib 的 rcParams 是全局状态，渲染入口用模块级锁串行化。
 
 | 路由 | 作用 |
 |---|---|

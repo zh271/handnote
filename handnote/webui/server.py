@@ -6,9 +6,11 @@ import email.parser
 import email.policy
 import io
 import json
+import os
 import re
 import time
 import uuid
+import webbrowser
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -461,11 +463,59 @@ $$M_R = \\begin{bmatrix} 0 & 1 & 0 \\\\ 0 & 1 & 0 \\\\ 1 & 0 & 0 \\end{bmatrix}$
 """
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
-    """Run the blocking HTTP server."""
-    httpd = ThreadingHTTPServer((host, port), Handler)
-    httpd.daemon_threads = True
-    print(f"handnote web UI: http://{host}:{port}/")
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows SO_REUSEADDR lets a second process bind a port that is already in
+    # use, so two launches would silently share one port. Elsewhere it only skips
+    # TIME_WAIT and stays on.
+    allow_reuse_address = os.name != "nt"
+
+
+def bind(host: str = "127.0.0.1", port: int = 8765, tries: int = 10) -> ThreadingHTTPServer:
+    """Bind the web UI, falling back to later ports and finally an OS-assigned one.
+
+    The preferred port can be taken by another program or fall inside a range that
+    Hyper-V / WSL2 / Docker reserve on Windows (WinError 10013 or 10048).
+
+    Args:
+        host: Interface to listen on.
+        port: Preferred port; 0 asks the OS for any free port.
+        tries: How many consecutive ports to try before falling back to port 0.
+
+    Returns:
+        A listening server; ``server_address`` holds the port actually used.
+
+    Raises:
+        OSError: When no port could be bound at all.
+    """
+    candidates = [port + i for i in range(tries) if port + i <= 65535] if port else []
+    candidates.append(0)
+    error: OSError | None = None
+    for candidate in candidates:
+        try:
+            return _Server((host, candidate), Handler)
+        except OSError as exc:
+            error = exc
+    assert error is not None
+    raise error
+
+
+def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
+    """Run the blocking HTTP server.
+
+    Args:
+        host: Interface to listen on.
+        port: Preferred port; see :func:`bind` for the fallback.
+        open_browser: Open the UI in the default browser once the port is bound.
+    """
+    httpd = bind(host, port)
+    actual = httpd.server_address[1]
+    url = f"http://{host}:{actual}/"
+    if port and actual != port:
+        print(f"端口 {port} 不可用（被占用或被系统保留），改用 {actual}", flush=True)
+    print(f"handnote web UI: {url}", flush=True)
+    if open_browser:
+        webbrowser.open(url)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
