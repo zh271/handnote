@@ -302,8 +302,11 @@ async function boot() {
     try {
       const data = await api("/api/upload?kind=markdown", { method: "POST", body: form });
       $("markdown").value = data.text;
+      const notes = data.warnings || [];
+      setStatus(`已导入 ${data.filename || ""}` + (notes.length ? `（${notes.join("；")}）` : ""));
       schedule(100);
     } catch (err) { setStatus("导入失败: " + err.message); }
+    event.target.value = ""; // allow importing the same file again
   });
 
   $("font-upload").addEventListener("change", async (event) => {
