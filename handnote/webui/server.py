@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .. import __version__
 from ..capture import build_capture_font
 from ..config import RenderConfig
 from ..fonts import list_fonts, resolve_font
@@ -64,7 +65,7 @@ STORE = Store()
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "handnote/0.1"
+    server_version = f"handnote/{__version__}"
     protocol_version = "HTTP/1.1"
 
     # -- plumbing ---------------------------------------------------------

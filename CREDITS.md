@@ -57,6 +57,18 @@ Pillow 和 Matplotlib 的 wheel 内置了 [FreeType](https://freetype.org/)（Da
 
 权重和 makemeahanzi 数据都在运行时下载到本机缓存，不随仓库分发。SDT 权重来自只限研究用途的数据集，用它生成的手写汉字字体请只作个人使用。
 
+## 整行生成（实验）
+
+| 项目 | 用途 | 作者 | 许可 | 地址 |
+|---|---|---|---|---|
+| DiffBrush | 整行手写生成模型。网络 vendor 在 `handnote/linegen/net/`（附原 LICENSE）；权重运行时从作者网盘下载 | Gang Dai 等（论文 *Beyond Isolated Words: Diffusion Brush for Handwritten Text-Line Generation*，ICCV 2025） | 代码 MIT | <https://github.com/dailenson/DiffBrush> |
+| IAM Handwriting Database | DiffBrush 权重的训练数据（handnote 不直接使用） | U. Marti、H. Bunke，伯尔尼大学 | **仅限非商业研究** | <https://fki.tic.heia-fr.ch/databases/iam-handwriting-database> |
+| Stable Diffusion v1.5 VAE | 潜空间与图像互转，运行时从 Hugging Face 下载 | Runway、CompVis、Stability AI | CreativeML OpenRAIL-M | <https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5> |
+| GNU Unifont | “写什么”的内容字形（16×16），取自 DiffBrush 仓库的 `unifont.pickle` | Roman Czyborra、Paul Hardy 等 | GPL-2.0+ with font embedding exception / OFL-1.1 | <https://unifoundry.com/unifont/> |
+| diffusers | 加载与运行 VAE（可选依赖） | Hugging Face | Apache-2.0 | <https://github.com/huggingface/diffusers> |
+
+以上权重和数据都在运行时下载到 `~/.cache/handnote/diffbrush/`，不随仓库分发。
+
 ## 生成的字体
 
 - 不加 `--merge` 构建出的符号字体，字形全部来自你自己的笔迹。
