@@ -41,6 +41,7 @@ handnote/
   capture.py      浏览器笔画 JSON 校验、光栅化、build_capture_font
   hanzi_data.py   makemeahanzi 下载、压缩缓存、IDS 解析、部件笔画与外框
   hanzi.py        手写汉字：笔顺校验、拆部件、拼合、推荐、build_hanzi_font
+  paper.py        稿纸：预设、行线网格 Grid、画线、扫描纸校正与行距检测
   fonts.py        字体缓存目录与下载源
   cli.py          命令行入口（python -m handnote）
   webui/          stdlib HTTP 服务 + 原生 JS 页面（无构建步骤）
@@ -136,7 +137,10 @@ symbols template ──▶ PDF + spec.json
 | `POST /api/hanzi/preview` | 拼合预览（PNG data URL）与部件来源 |
 | `POST /api/hanzi/build`、`GET /api/hanzi/build/<id>` | 后台构建手写汉字字体，轮询进度 |
 
-汉字相关路由在 `webui/hanzi_api.py`，`server.py` 只做转发。
+| `POST /api/paper/scan`、`GET /api/paper/raw/<id>` | 上传纸张照片，返回自动识别的四角；角点编辑用的缩略图 |
+| `POST /api/paper/apply`、`GET /api/paper/file/<name>` | 按四角校正、去阴影，存为 `paper-*.png`，并检测行距 |
+
+汉字相关路由在 `webui/hanzi_api.py`，稿纸相关在 `webui/paper_api.py`，`server.py` 只做转发。`/api/render` 只接受 `var/uploads/paper-*.png` 作为 `paper_image`。
 
 上传和构建产物写到当前目录的 `var/uploads/`（已在 `.gitignore`）。
 

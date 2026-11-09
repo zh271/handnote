@@ -33,6 +33,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="content">内容</button>
       <button class="tab" data-tab="params">参数</button>
+      <button class="tab" data-tab="paper">纸张</button>
       <button class="tab" data-tab="symbols">符号页</button>
     </nav>
 
@@ -91,6 +92,90 @@
         <label class="check" title="字形和公式以矢量轮廓写入 PDF，放大不失真；纸张只保留底色和渐变，不含颗粒"><input type="checkbox" id="vector_pdf"> 矢量 PDF</label>
         <button class="btn ghost" id="reset-btn">恢复默认</button>
       </div>
+    </div>
+
+    <div class="tab-body hidden" id="tab-paper">
+      <div class="paper-presets" id="paper-presets" role="list" aria-label="稿纸预设"></div>
+      <div class="controls" id="paper-controls">
+        <label class="field"><span>样式</span>
+          <select id="paper_style">
+            <option value="plain">白纸</option>
+            <option value="lined">横线</option>
+            <option value="grid">方格</option>
+            <option value="dots">点阵</option>
+            <option value="essay">作文格（一字一格）</option>
+            <option value="tianzi">田字格（一字一格）</option>
+            <option value="image">扫描的纸</option>
+          </select></label>
+        <div class="row gap color-row">
+          <label class="check"><input type="checkbox" id="paper_color_on"> 纸色</label>
+          <input type="color" id="paper_color" value="#fafafa" title="纸张底色">
+          <label class="check">线色 <input type="color" id="rule_color" value="#7fa3cf"></label>
+        </div>
+        <label class="field"><span>线条浓度 <b data-out="rule_alpha"></b></span>
+          <input type="range" id="rule_alpha" min="0" max="255" step="1"></label>
+        <label class="field"><span>线宽 (px) <b data-out="rule_width"></b></span>
+          <input type="range" id="rule_width" min="0.4" max="4" step="0.1"></label>
+        <label class="field"><span>行距 (px) <b data-out="rule_pitch" data-zero="跟随正文行距"></b></span>
+          <input type="range" id="rule_pitch" min="0" max="140" step="0.01"></label>
+        <label class="field"><span>首条线位置 (px) <b data-out="rule_top" data-zero="自动"></b></span>
+          <input type="range" id="rule_top" min="0" max="700" step="0.01"></label>
+        <label class="field"><span>格子 / 方格边长 (px) <b data-out="cell_size" data-zero="自动"></b></span>
+          <input type="range" id="cell_size" min="0" max="90" step="0.5"></label>
+        <label class="field"><span>上边距 <b data-out="margin_top"></b></span>
+          <input type="range" id="margin_top" min="0" max="500" step="1"></label>
+        <label class="field"><span>左右边距 <b data-out="margin_x"></b></span>
+          <input type="range" id="margin_x" min="0" max="400" step="1"></label>
+        <label class="field"><span>下边距 <b data-out="margin_bottom"></b></span>
+          <input type="range" id="margin_bottom" min="0" max="500" step="1"></label>
+        <div class="cell-opts" id="cell-opts">
+          <label class="check"><input type="checkbox" id="cell_snap"> 文字对齐格子（一字一格）</label>
+          <div class="essay-opts" id="essay-opts">
+            <label class="field"><span>字数格</span>
+              <select id="essay-count">
+                <option value="0x0">不限（按字号排格）</option>
+                <option value="20x15">300 字（20×15）</option>
+                <option value="20x20">400 字（20×20）</option>
+                <option value="25x20">500 字（25×20）</option>
+                <option value="20x30">600 字（20×30）</option>
+                <option value="25x32">800 字（25×32）</option>
+                <option value="custom">自定义…</option>
+              </select></label>
+            <div class="row gap essay-custom" id="essay-custom">
+              <label class="field"><span>每行格数</span><input type="number" id="grid_cols" min="0" max="60" step="1"></label>
+              <label class="field"><span>每页行数</span><input type="number" id="grid_rows" min="0" max="80" step="1"></label>
+            </div>
+            <label class="check"><input type="checkbox" id="count_marks"> 字数标记（每 100 字、页脚格数）</label>
+            <p class="note small-note">按字数排格时，格子铺满版心，正文字号由格子大小决定；超过一页时字数接着往下数。</p>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="paper_snap"> 文字对齐行线</label>
+        <label class="check"><input type="checkbox" id="margin_rule"> 红色边线</label>
+      </div>
+      <hr>
+      <p class="note">扫描导入：拍一张空白稿纸（或扫描件），拖动四个角对准纸边，应用后作为页面背景。纸上有横线时会自动测出行距，让文字落在线上；测得不准可以在上面手动调“行距”和“首条线位置”。</p>
+      <div class="row gap">
+        <label class="btn ghost" for="paper-scan">选择照片…</label>
+        <input id="paper-scan" type="file" accept="image/*" hidden>
+        <button class="btn ghost hidden" id="scan-clear">不用扫描纸</button>
+      </div>
+      <div id="scan-editor" class="scan-editor hidden">
+        <div class="scan-stage" id="scan-stage">
+          <img id="scan-img" alt="上传的稿纸照片">
+          <svg id="scan-svg" aria-hidden="true"></svg>
+        </div>
+        <div class="row gap">
+          <button class="btn ghost small" id="scan-detected">自动识别的角</button>
+          <button class="btn ghost small" id="scan-full">整张图</button>
+        </div>
+        <label class="field"><span>光线均匀化 <b data-out="scan-evenness"></b></span>
+          <input type="range" id="scan-evenness" min="0" max="1" step="0.05" value="0.8"></label>
+        <label class="field"><span>提亮纸色 <b data-out="scan-whiten"></b></span>
+          <input type="range" id="scan-whiten" min="0" max="1" step="0.05" value="0.6"></label>
+        <label class="check"><input type="checkbox" id="scan-gray"> 转为灰度</label>
+        <button class="btn primary" id="scan-apply">应用为背景</button>
+      </div>
+      <div id="scan-result" class="coverage"></div>
     </div>
 
     <div class="tab-body hidden" id="tab-symbols">

@@ -33,7 +33,12 @@ def _overrides(pairs: list[str]) -> dict:
 
 
 def _config(args: argparse.Namespace) -> RenderConfig:
-    data = _overrides(getattr(args, "set", []) or [])
+    data: dict[str, object] = {}
+    if getattr(args, "paper", None):
+        from .paper import preset
+
+        data.update(preset(args.paper))
+    data.update(_overrides(getattr(args, "set", []) or []))
     data.setdefault("font_path", str(resolve_font(getattr(args, "font", None))))
     return RenderConfig.from_mapping(data)
 
@@ -208,6 +213,33 @@ def cmd_hanzi(args: argparse.Namespace) -> int:
     return 0 if report["glyphs"] else 1
 
 
+def cmd_paper(args: argparse.Namespace) -> int:
+    """Turn a photo of blank paper into a page background and measure its lines."""
+    from PIL import Image
+
+    from .paper import PRESETS, detect_page, detect_rules, flatten_scan
+
+    if args.paper_command == "presets":
+        for key, (label, fields) in PRESETS.items():
+            print(f"{key:14s} {label}  {fields.get('paper_style', 'plain')}")
+        return 0
+    with Image.open(args.image) as img:
+        img = img.convert("RGB")
+        corners = (json.loads(args.corners) if args.corners else detect_page(img))
+        sheet = flatten_scan(img, corners, (args.width, args.height),
+                             evenness=args.evenness, whiten=args.whiten, gray=args.gray)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(out)
+    rules = detect_rules(sheet)
+    report = {"out": str(out), "corners": corners, "rules": rules,
+              "set": ["paper_style=image", f"paper_image={out}"]}
+    if rules:
+        report["set"] += [f"rule_pitch={rules['pitch']}", f"rule_top={rules['top']}"]
+    print(json.dumps(report, ensure_ascii=False, indent=1))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .webui.server import serve
 
@@ -228,6 +260,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("input", help="Markdown file, or - for stdin")
     r.add_argument("-o", "--out", default="out/handnote.pdf",
                    help="output .pdf, single .png, or a directory")
+    r.add_argument("--paper", metavar="PRESET",
+                   help="paper preset (see `handnote paper presets`); --set overrides it")
     add_common(r)
     r.set_defaults(func=cmd_render)
 
@@ -314,6 +348,20 @@ def build_parser() -> argparse.ArgumentParser:
                     help="pen pressure gain: 0 = uniform width, 1 = default, 2 = strong")
     for p in (hf, hp, hb):
         p.set_defaults(func=cmd_hanzi)
+
+    pa = sub.add_parser("paper", help="paper presets and scanned paper backgrounds")
+    pasub = pa.add_subparsers(dest="paper_command", required=True)
+    pasub.add_parser("presets", help="list paper presets")
+    ps = pasub.add_parser("scan", help="flatten a photo of blank paper into a background")
+    ps.add_argument("image", help="photo or scan of the paper")
+    ps.add_argument("-o", "--out", default="out/paper.png")
+    ps.add_argument("--width", type=int, default=1240, help="page width in pixels")
+    ps.add_argument("--height", type=int, default=1754, help="page height in pixels")
+    ps.add_argument("--corners", help="JSON [[x,y]*4] clockwise from top-left (default: detect)")
+    ps.add_argument("--evenness", type=float, default=0.8, help="0-1, remove uneven light")
+    ps.add_argument("--whiten", type=float, default=0.6, help="0-1, brighten the paper")
+    ps.add_argument("--gray", action="store_true", help="drop the colour")
+    pa.set_defaults(func=cmd_paper)
 
     w = sub.add_parser("serve", help="start the local web UI")
     w.add_argument("--host", default="127.0.0.1")

@@ -16,6 +16,7 @@ bytes.
 
 from __future__ import annotations
 
+import io
 import math
 import zlib
 from dataclasses import dataclass, field
@@ -75,11 +76,15 @@ class VectorPage:
     width: int
     height: int
     ink: tuple[int, int, int]
-    #: ``(top_gray, bottom_gray)`` paper shades, or ``None`` for plain white.
-    paper: tuple[float, float] | None = None
+    #: ``(top_rgb, bottom_rgb)`` paper shades (0-255), or ``None`` for plain white.
+    paper: tuple[tuple[float, ...], tuple[float, ...]] | None = None
     #: ``("path", key, matrix, alpha, line_width)``, ``("stroke", points, matrix, alpha,
     #: width)`` or ``("image", rgba_image, matrix)``. Widths are in the item's own units.
     items: list[tuple] = field(default_factory=list)
+    #: Printed lines and dots (:class:`handnote.paper.Rule`), under the ink.
+    rules: list = field(default_factory=list)
+    #: Scanned sheet drawn full-page under everything (embedded as JPEG).
+    background: Image.Image | None = None
 
 
 def shift_items(items: list[tuple], dx: float, dy: float) -> list[tuple]:
@@ -205,6 +210,52 @@ def _image_object(pdf: _Pdf, img: Image.Image) -> int:
                       rgba.convert("RGB").tobytes())
 
 
+def _jpeg_object(pdf: _Pdf, img: Image.Image) -> int:
+    buffer = io.BytesIO()
+    rgb = img.convert("RGB")
+    rgb.save(buffer, format="JPEG", quality=88, optimize=True)
+    w, h = rgb.size
+    return pdf.stream(f"/Type /XObject /Subtype /Image /Width {w} /Height {h} "
+                      "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+                      buffer.getvalue(), compress=False)
+
+
+def _rule_ops(rules: list, alpha) -> str:
+    """Content-stream operators for printed lines and dots, grouped by style."""
+    from .paper import label_path  # paper imports matplotlib; only needed for labels
+
+    ops: list[str] = []
+    style = None
+    for r in rules:
+        if r.kind == "text":
+            if style is not None:
+                ops.append("S Q")
+                style = None
+            verts, codes, advance = label_path(r.label, r.width)
+            moved = verts + (r.pos - advance * r.end, r.start)
+            rgb = " ".join(_num(c / 255) for c in r.rgb)
+            ops.append(f"q /{alpha(r.alpha)} gs {rgb} rg {path_ops(moved, codes, 2)} f Q")
+            continue
+        key = (r.rgb, r.alpha, r.width, r.dash, r.kind == "dot")
+        if key != style:
+            if style is not None:
+                ops.append("S Q")
+            rgb = " ".join(_num(c / 255) for c in r.rgb)
+            dash = f"[{_num(r.dash[0])} {_num(r.dash[1])}] 0 d " if r.dash else ""
+            cap = 1 if r.kind == "dot" else 0
+            ops.append(f"q /{alpha(r.alpha)} gs {rgb} RG {_num(r.width)} w {cap} J {dash}")
+            style = key
+        if r.kind == "h":
+            ops.append(f"{_num(r.start)} {_num(r.pos)} m {_num(r.end)} {_num(r.pos)} l")
+        elif r.kind == "v":
+            ops.append(f"{_num(r.pos)} {_num(r.start)} m {_num(r.pos)} {_num(r.end)} l")
+        else:
+            ops.append(f"{_num(r.pos)} {_num(r.start)} m {_num(r.pos)} {_num(r.start)} l")
+    if style is not None:
+        ops.append("S Q")
+    return "\n".join(ops)
+
+
 def write_pdf(pages: list[VectorPage], outlines: dict, dpi: float) -> bytes:
     """Encode recorded pages as a vector PDF.
 
@@ -222,6 +273,7 @@ def write_pdf(pages: list[VectorPage], outlines: dict, dpi: float) -> bytes:
     alphas: dict[int, str] = {}
     images: dict[str, int] = {}
     shadings: dict[str, int] = {}
+    backgrounds: dict[int, str] = {}
     page_nums: list[int] = []
     scale = 72.0 / float(dpi)
 
@@ -258,15 +310,25 @@ def write_pdf(pages: list[VectorPage], outlines: dict, dpi: float) -> bytes:
         ink = f"{_num(r)} {_num(g)} {_num(b)}"
         ops = [f"q {_num(scale)} 0 0 {_num(-scale)} 0 {_num(page.height * scale)} cm"]
         if page.paper is not None:
-            top, bottom = (min(1.0, max(0.0, v / 255)) for v in page.paper)
-            key = f"{top:.4f}-{bottom:.4f}-{page.height}"
+            top, bottom = (" ".join(_num(min(1.0, max(0.0, v / 255))) for v in shade)
+                           for shade in page.paper)
+            key = f"{top}-{bottom}-{page.height}"
             if key not in shadings:
-                fn = pdf.add(f"<< /FunctionType 2 /Domain [0 1] /C0 [{_num(top)}] "
-                             f"/C1 [{_num(bottom)}] /N 1 >>".encode())
-                shadings[key] = pdf.add(f"<< /ShadingType 2 /ColorSpace /DeviceGray "
+                fn = pdf.add(f"<< /FunctionType 2 /Domain [0 1] /C0 [{top}] "
+                             f"/C1 [{bottom}] /N 1 >>".encode())
+                shadings[key] = pdf.add(f"<< /ShadingType 2 /ColorSpace /DeviceRGB "
                                         f"/Coords [0 0 0 {page.height}] /Function {fn} 0 R "
                                         "/Extend [true true] >>".encode())
-            ops.append(f"0 0 {page.width} {page.height} re W n /S{shadings[key]} sh")
+            ops.append(f"q 0 0 {page.width} {page.height} re W n /S{shadings[key]} sh Q")
+        if page.background is not None:
+            name = backgrounds.get(id(page.background))
+            if name is None:
+                name = f"I{len(images)}"
+                images[name] = _jpeg_object(pdf, page.background)
+                backgrounds[id(page.background)] = name
+            ops.append(f"q {page.width} 0 0 {-page.height} 0 {page.height} cm /{name} Do Q")
+        if page.rules:
+            ops.append(_rule_ops(page.rules, alpha))
         ops.append(f"{ink} rg {ink} RG 1 J 1 j")
         for item in page.items:
             kind = item[0]
