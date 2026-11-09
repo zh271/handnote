@@ -304,6 +304,51 @@ def cmd_docx(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_line(args: argparse.Namespace) -> int:
+    """Experimental DiffBrush text lines (English only)."""
+    from .linegen import available, weights
+
+    def show(info: dict) -> None:
+        print(json.dumps(info, ensure_ascii=False), file=sys.stderr, flush=True)
+
+    command = args.line_command
+    if command == "fetch":
+        def fetched(what: str, done: int, total: int) -> None:
+            if done == total or done % (64 << 20) < (1 << 20):
+                show({"file": what, "done": done, "total": total})
+
+        print(json.dumps(weights.fetch(fetched), ensure_ascii=False, indent=1))
+        return 0
+    if not available():
+        raise SystemExit("this command needs the linegen extra: pip install -e \".[linegen]\" "
+                         "(see README for the GPU builds of torch)")
+    if command == "bench":
+        from .linegen.bench import run
+
+        print(json.dumps(run(args.device, steps=args.steps, repeats=args.repeats,
+                             half=args.half), ensure_ascii=False, indent=1))
+        return 0
+    from .linegen.generate import generate_lines, stack
+    from .linegen.style import check_text, wrap
+
+    text = args.text if args.text is not None else Path(args.file).read_text(encoding="utf-8")
+    lines = wrap(text, args.width)
+    if not lines:
+        raise SystemExit("nothing to write")
+    try:
+        for line in lines:
+            check_text(line)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    images = generate_lines(lines, args.style, device=args.device, steps=args.steps,
+                            seed=args.seed, half=args.half, progress=show)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    stack(images).save(out)
+    print(json.dumps({"out": str(out), "lines": len(images)}, ensure_ascii=False))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .webui.server import serve
 
@@ -441,6 +486,26 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("input", help=".docx file")
     d.add_argument("-o", "--out", help="output .md (default: stdout)")
     d.set_defaults(func=cmd_docx)
+
+    li = sub.add_parser("line", help="experimental: whole English lines with DiffBrush")
+    lsub = li.add_subparsers(dest="line_command", required=True)
+    lsub.add_parser("fetch", help="download the DiffBrush checkpoint, SD1.5 VAE and glyphs")
+    lg = lsub.add_parser("generate", help="write text lines imitating a reference line")
+    lg.add_argument("--style", required=True,
+                    help="reference line image, or a folder (first image wider than 512 px)")
+    src = lg.add_mutually_exclusive_group(required=True)
+    src.add_argument("--text", help="text to write (wrapped into lines)")
+    src.add_argument("--file", help="UTF-8 text file to write")
+    lg.add_argument("-o", "--out", default="out/lines.png")
+    lg.add_argument("--width", type=int, default=60, help="characters per line (max 70)")
+    lb = lsub.add_parser("bench", help="time one line here and estimate other GPUs")
+    lb.add_argument("--repeats", type=int, default=2)
+    for p in (lg, lb):
+        p.add_argument("--device", default="auto", help="auto, cuda (also ROCm), dml or cpu")
+        p.add_argument("--steps", type=int, default=50, help="DDIM steps (fewer = faster)")
+        p.add_argument("--half", action="store_true", help="float16 (GPU only)")
+    lg.add_argument("--seed", type=int, default=0)
+    li.set_defaults(func=cmd_line)
 
     w = sub.add_parser("serve", help="start the local web UI")
     w.add_argument("--host", default="127.0.0.1")

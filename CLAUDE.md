@@ -10,7 +10,7 @@
 2. **补字**：符号模板 PDF →（手写扫描 | 浏览器笔画）→ 描摹成 TTF → 合并进中文字体，补掉 mathtext 回退。
 3. **手写汉字**（可选）：浏览器写 60–100 字 → 微调 SDT → 生成其余汉字 → 同一个描摹器出 TTF → 合并。
 
-纯 CPU，无 GPU 依赖。Python ≥ 3.11，依赖 pillow / numpy / matplotlib / fonttools / opencv-headless。核心不含模型权重；手写汉字是可选组件（`pip install -e ".[model]"`，torch / torchvision / einops），权重运行时下载，`handnote/model/` 之外的模块不得在顶层 import torch。
+纯 CPU，无 GPU 依赖。Python ≥ 3.11，依赖 pillow / numpy / matplotlib / fonttools / opencv-headless。核心不含模型权重；手写汉字是可选组件（`pip install -e ".[model]"`，torch / torchvision / einops），权重运行时下载，`handnote/model/` 与 `handnote/linegen/` 之外的模块不得在顶层 import torch / diffusers。v2 的整行生成（`linegen`，`pip install -e ".[linegen]"`）是调研原型，不接入渲染器和 Web。
 
 ## 常用命令
 
@@ -20,6 +20,7 @@ python -m handnote fonts fetch zhimang          # 下载默认字体（OFL）
 python -m handnote render examples/math-symbols.md -o out/demo.pdf
 python -m handnote analyze examples/math-symbols.md
 python -m handnote serve                         # Web UI :8765
+python -m handnote line generate --style ref.png --text "Hello" -o out/lines.png   # 实验，需 .[linegen]
 python -m pytest -q
 ruff check handnote tests
 ```
@@ -47,6 +48,7 @@ ruff check handnote tests
 | `handnote/model/train.py` | `finetune`：只用笔迹损失、冻结内容编码器；模型 = `.pth` + `.json` 元数据 |
 | `handnote/model/generate.py` | `generate`：分套生成、少笔重写（`pick_best`）、摆放（`place`）、压感（`shade`）、断点续跑 |
 | `handnote/model/pressure.py` | 压感回归（numpy）与通用规则 |
+| `handnote/linegen/` | v2 实验：DiffBrush 整行生成（英文）。`weights`（下载/缓存，无 torch）、`style`（参考行、文本校验、均衡换行，无 torch）、`device`（CUDA/ROCm/DirectML/CPU）、`generate`（`LineGenerator`、DDIM）、`bench`（测速与按 FLOPs 估算）、`net/`（vendor 的 DiffBrush，MIT，须能 `strict=True` 加载作者 checkpoint） |
 | `handnote/fonts.py` | 字体缓存目录与下载 |
 | `handnote/cli.py` | 命令行入口 |
 | `handnote/update.py` | `start.bat` 的 git 快进自更新；只用 stdlib（在装依赖前运行），失败一律跳过不阻塞启动 |

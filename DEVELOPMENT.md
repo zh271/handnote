@@ -50,6 +50,7 @@ handnote/
   hanzi_data.py   makemeahanzi 下载与缓存：描红中线、笔画数、标准外框
   hanzi_font.py   汉字采集格式、笔顺提示、build_hanzi_font
   model/          手写汉字模型（可选，需要 torch）：sdt 网络、权重下载、训练、生成、压感
+  linegen/        v2 实验：DiffBrush 整行生成（可选，需要 torch + diffusers）：权重、参考行、采样、测速
   paper.py        稿纸：预设、行线网格 Grid、画线、扫描纸校正与行距检测
   fonts.py        字体缓存目录与下载源
   cli.py          命令行入口（python -m handnote）
@@ -129,6 +130,21 @@ symbols template ──▶ PDF + spec.json
 - 推理比上游快约 3 倍：解码器只跑已生成的前缀（因果掩码下等价），一批里所有字都结束就停（上游要求同一步结束）。
 - 漏笔：约 10% 的生成字比标准少一笔，多数是合理的连写；少两笔以上的字换风格图重写，仍然不行就不收入字体。
 - 训练和生成都很慢（分钟级），Web 端放在后台线程，进度写进 `_JOBS`，页面轮询；生成结果每 64 字落盘一次，可以续跑。
+
+### 整行生成（实验）
+
+```
+参考行图片 ─ style.load_style（灰度、定高 64、≤1024 宽、过窄则平铺）
+                                      │
+文本 ─ style.wrap（按长度均衡换行）─ Unifont 内容字形 ─┐
+                                      ▼
+    UNet.encode_context（风格 + 内容，每行算一次）
+    种子噪声 (1,4,8,128) ─ DDIM 50 步（eta=0）─ SD1.5 VAE 解码 ─ 灰度 64×1024 ─ 裁右侧空白
+```
+
+- 网络 vendor 在 `linegen/net/`，只做最小改动以便严格加载作者的 checkpoint：相对导入、构造时不下载 ImageNet 权重、`Proxy_Anchor` 只留参数（上游写死 `.cuda()`）、`forward` 可接收预先算好的 `context`。
+- checkpoint 用 `torch.load(weights_only=True)` 读；`unifont.pickle` 用 `model/weights.py` 的只认 numpy 的 unpickler，只保留 80 个 IAM 字符。
+- 确定性：同一权重、参考图、文本、种子、步数在同一设备上出同一张图。
 
 ### Web 服务
 
@@ -211,7 +227,7 @@ python -m pytest tests/test_answer_skill.py -q
 
 - 提交信息用 Conventional Commits，小写前缀：`feat:`、`fix:`、`docs:`、`test:`、`refactor:`、`ci:`、`chore:`。
 - 推到 `main` 和每个 Pull Request 都会跑 [CI](.github/workflows/tests.yml)：ruff + 三个 Python 版本的 pytest。
-- 版本号在 `pyproject.toml` 和 `handnote/__init__.py` 两处，发布时同步修改。
+- 版本号在 `pyproject.toml` 和 `handnote/__init__.py` 两处，发布时同步修改（Web 服务的 `Server` 头从 `__version__` 读取）。发布打 `vX.Y.Z` 标签并建 GitHub Release；版本历史见 [MILESTONES.md](MILESTONES.md#版本)。
 - 新功能从最新的 `main` 拉分支开发。`feat/hanzi-components` 是已冻结的参考分支（按偏旁拆分再拼合的手写汉字旧方案，被 SDT 模型取代，原因见 [MILESTONES.md](MILESTONES.md)）：不再更新，也不要合并进 `main`；需要借用其中的代码时手动挑选移植。
 
 ## 进度与待办

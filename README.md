@@ -23,6 +23,7 @@
 - [Markdown 写法](#markdown-写法)
 - [用自己的笔迹](#用自己的笔迹)
 - [手写汉字](#手写汉字)
+- [实验：整行生成（DiffBrush）](#实验整行生成diffbrush)
 - [多套字形](#多套字形)
 - [稿纸](#稿纸)
 - [参数](#参数)
@@ -270,6 +271,36 @@ python -m handnote hanzi build out/generated.json -o out/hand.ttf     --merge ~/
 - 写得越多、字的结构越多样，生成的字越像你。
 - 模型和生成结果只由你的笔迹决定：同一份笔迹、同一个模型文件，生成的字体相同。
 
+## 实验：整行生成（DiffBrush）
+
+v2 的调研原型，和上面的字体链路互不影响。[DiffBrush](https://github.com/dailenson/DiffBrush)（ICCV 2025）不生成单字，而是照着一行参考笔迹，直接画出一整行手写图片，连笔、字距、行内起伏都来自模型。
+
+现状（决定是否用它替换现有方案前要知道的）：
+
+- **只能写英文**：作者只公开了 IAM 英文权重（80 个字符：字母、数字、常用标点）。论文里有中文实验，但中文权重和训练代码都没有公开。
+- 输出是 64 像素高的整行灰度图，不是字体，暂时不能进渲染器排版。
+- 会写错字：偶尔漏字母、重复单词。少于约 35 个字符的行，模型会用重复的内容填满剩下的画布，所以文字按长度均衡换行。
+- 速度（50 步）：4 线程 CPU 每行约 17 秒；GPU 用 `bench` 实测，见下。
+
+```bash
+pip install -e ".[linegen]"                  # torch + diffusers；GPU 版 torch 先装好，见下
+python -m handnote line fetch                # 下载权重（1.2GB）、SD1.5 VAE（335MB）和字形，只需一次
+python -m handnote line generate --style 参考行.png --text "Hello from handnote." -o out/lines.png
+python -m handnote line bench                # 测本机每行耗时，并估算其他显卡
+```
+
+- `--style`：一张手写行的图片（扫描或拍照裁成一行，越宽越好，至少写满半行），或一个文件夹（取第一张够宽的）。
+- `--steps`：去噪步数，默认 50；减到 20 左右快一倍多，字迹略糙。`--half`：GPU 上用半精度。
+- `--device`：`auto`（默认）依次尝试 CUDA/ROCm、DirectML、CPU；也可指定 `cuda`、`dml`、`cpu`。
+
+GPU：
+
+- **NVIDIA**：按 [pytorch.org](https://pytorch.org/get-started/locally/) 装 CUDA 版 torch。
+- **AMD（如 RX 9070 XT）**：Linux 或 WSL2 装 ROCm 版 torch（`--device cuda`，ROCm 也走这个名字）；Windows 原生可试 AMD 发布的 ROCm 版 PyTorch 预览包，或者 `pip install torch-directml`（`--device dml`，算子支持不全，可能比 ROCm 慢）。
+- `bench` 的其他显卡数字是按算力推算的粗估，以实测为准。
+
+> **许可**：DiffBrush 代码是 MIT 许可（网络 vendor 在 `handnote/linegen/net/`）；权重用 IAM 训练，IAM **仅限非商业研究**；SD1.5 VAE 为 CreativeML OpenRAIL-M。handnote 不分发任何权重。
+
 ## 稿纸
 
 页面背景可以是白纸、印好的稿纸，或者你自己拍的纸。
@@ -443,6 +474,7 @@ mathtext 解析失败，通常是用了不支持的命令（`\le`、`\iff`、`ca
 - PDF 里的字是轮廓，不是可选中、可搜索的文字；PNG 是位图。
 - 手写多套只覆盖写过的字符；汉字只有合成的多套。
 - 手写汉字需要 PyTorch 和 SDT 权重（仅限个人使用），少数生成的字会漏笔。
+- 整行生成（DiffBrush）是实验功能：只支持英文，输出图片而非字体，偶尔写错字。
 - 透视校正只处理平面变形；纸张弯曲、褶皱无法拉平。
 - 公式不支持 `cases`、`aligned`、`array` 等环境。
 - 导入 Word 时表格、图片、文本框不能保持原样；公式只转换常见结构。
@@ -458,6 +490,7 @@ mathtext 解析失败，通常是用了不支持的命令（`\le`、`\iff`、`ca
 | [CREDITS.md](CREDITS.md) | 依赖的开源项目、字体及其作者与许可 |
 | [CLAUDE.md](CLAUDE.md) | 给 AI 编程助手的工程约定与不变量 |
 | [MILESTONES.md](MILESTONES.md) / [TODO.md](TODO.md) | 进度、设计决策与待办 |
+| [docs/releases.md](docs/releases.md) | 各版本发布说明（v1.0.0 拼字版、v1.1.0 SDT 版、v2 开发中） |
 
 ## 许可
 
