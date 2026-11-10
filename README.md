@@ -99,7 +99,9 @@ python -m handnote render notes.md -o out/a.pdf --set body_size=28 --set seed=3
 
 `examples/` 里有三份可以直接渲染的示例。
 
-PDF 默认是**矢量**的：每个字、每条公式、矩阵括号都以轮廓写入，放大到多少都不会出现锯齿，排版和抖动与 PNG 预览逐字一致，文件通常还比位图 PDF 小。纸张只保留底色和上下渐变，没有 PNG 里那层细微颗粒。想要和 PNG 完全一样的位图 PDF：
+PDF 默认是**矢量**的：每个字、每条公式、矩阵括号都以轮廓写入，放大到多少都不会出现锯齿，排版和抖动与 PNG 预览逐字一致，文件通常还比位图 PDF 小。
+
+背景默认**透明**：只画稿纸的线和格子，不铺底色，打印出来没有灰底；PNG 带透明通道。想在屏幕上看起来像纸，勾选“纸张底色”（`--set paper=true`），矢量 PDF 里纸张只保留底色和上下渐变，没有 PNG 里那层细微颗粒。想要和 PNG 完全一样的位图 PDF：
 
 ```bash
 python -m handnote render notes.md -o out/notes.pdf --set vector_pdf=false
@@ -146,6 +148,7 @@ python -m handnote docx notes.docx -o notes.md      # 只转换，便于先检�
 - 标题样式（标题 1–3、标题、副标题，以及设了大纲级别的段落）变成对应级别的标题；整段加粗的短句当作小标题。
 - 自动编号变成编号列表，项目符号变成 `-` 列表；“一、”“(1)”“a)”“①”这类编号保留在文字前面，编号会按 Word 的层级和重新开始计数。
 - 分页符、“段前分页”变成分页；段内换行保留为换行。
+- 段落格式：居中、右对齐，左缩进、首行缩进、悬挂缩进（按“字符”或磅值都能识别，包括从样式继承的），以及用全角空格打出来的缩进；多级列表每深一级缩进两个字；空段落保留为空行。转出来是下面 [Markdown 写法](#markdown-写法) 里的 `{.center}`、`{indent=2}`、`&nbsp;` 等标记，可以在编辑框里改。
 - Word 公式（公式编辑器）转成 LaTeX：分数、上下标、根号、求和/积分、括号、函数、矩阵等；多行公式拆成几行居中公式。
 - 表格按行转成段落（单元格之间空两格）；图片、文本框、页眉页脚不导入，导入后会提示。
 - 只支持 `.docx`。旧版 `.doc` 请先在 Word 里另存为 `.docx`。
@@ -165,11 +168,16 @@ handnote 支持 Markdown 的一个子集：
 | 正文中的 `$A=\begin{bmatrix}...\end{bmatrix}$` | 行内小矩阵，所在行自动加高 |
 | `---` | 强制分页 |
 | ` ``` ` 代码块 | 原样输出文字 |
+| 行尾 `{.center}` / `{.right}` | 本段（标题、列表项）居中 / 右对齐 |
+| 行尾 `{indent=2}` / `{first=2}` | 整段左缩进 / 首行再缩进，单位是字；`first` 为负是悬挂缩进；可组合：`{.center indent=2}` |
+| 段首全角空格 `　　` | 首行缩进，一个全角空格一个字 |
+| 单独一行 `&nbsp;` 或 `<br>` | 空一行 |
 
 - 相邻两行不空行会拼成一段；要分段请空一行。
 - 公式由 matplotlib mathtext 排版，支持常见的上下标、分式、根式、希腊字母、求和积分等；不支持 `cases`、`aligned`、`array` 环境。
 - 汉字和公式之间不用加空格，加了也会自动去掉；英文单词和公式之间的空格会保留。
 - 矩阵行用 `\\` 分隔（被复制成单个 `\` 也能识别），单元格用 `&`。
+- 版式：缩进在作文格、田字格上按整格算，居中、右对齐也落在格子上；居中公式与矩阵本来就居中，不受这些标记影响。
 
 ## 用自己的笔迹
 
@@ -370,9 +378,10 @@ python -m handnote render notes.md -o out/a.pdf --set glyph_sets=1     # 关闭�
 | `size_wobble` | 1.0 | 字号随机幅度（px） |
 | `ink_alpha_min` / `ink_alpha_max` | 238 / 255 | 墨色深浅范围 |
 | `math_scale` / `display_size` | 1.12 / 36 | 行内公式相对正文的比例、居中公式字号 |
+| `paper` | false | 纸张底色（颗粒、渐变、纸色）；关闭时背景透明，只画线和格子 |
 | `paper_noise` / `paper_gradient` | 1.6 / 3.0 | 纸张颗粒与纵向渐变 |
 | `paper_style` | plain | 稿纸样式：`plain` `lined` `grid` `dots` `essay` `tianzi` `image` |
-| `paper_color` / `rule_color` | 空 / #7fa3cf | 纸色（空为 `paper_base` 灰白）、线色 |
+| `paper_color` / `rule_color` | 空 / #7fa3cf | 纸色（空为 `paper_base` 灰白，`paper` 开启时生效）、线色 |
 | `rule_alpha` / `rule_width` | 150 / 1.3 | 线条浓度（0–255）、线宽（px） |
 | `rule_pitch` / `rule_top` | 0 / 0 | 行距与第一条线的 y（px）；0 为自动（跟随正文行距和上边距） |
 | `cell_size` | 0 | 作文格、田字格的格子边长，方格、点阵的间距；0 为自动 |
@@ -459,6 +468,9 @@ python -m handnote render answer.md -o out/answer.pdf
 **整条公式变成了原样的源码文字。**
 mathtext 解析失败，通常是用了不支持的命令（`\le`、`\iff`、`cases`、`\boxed` 等）。可用的写法参考 [SKILL.md 的白名单](skills/concise-answer/SKILL.md#4-公式白名单)。
 
+**打印出来有一层灰底 / 阴影。**
+关掉“纸张底色”（`--set paper=false`，现在是默认）。背景透明，只留稿纸的线和格子。扫描导入的纸是照片，本身带底色。
+
 **每次渲染结果都一样。**
 这是有意的：同一 `seed` 输出逐字节一致。想换一种“笔迹”，改 `seed`。
 
@@ -477,7 +489,7 @@ mathtext 解析失败，通常是用了不支持的命令（`\le`、`\iff`、`ca
 - 整行生成（DiffBrush）是实验功能：只支持英文，输出图片而非字体，偶尔写错字。
 - 透视校正只处理平面变形；纸张弯曲、褶皱无法拉平。
 - 公式不支持 `cases`、`aligned`、`array` 等环境。
-- 导入 Word 时表格、图片、文本框不能保持原样；公式只转换常见结构。
+- 导入 Word 时表格、图片、文本框不能保持原样；字号、字体、行距、段前段后间距、两端对齐不导入；公式只转换常见结构。
 
 更多计划见 [TODO.md](TODO.md)。
 

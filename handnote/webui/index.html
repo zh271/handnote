@@ -39,14 +39,14 @@
 
     <div class="tab-body" id="tab-content">
       <div class="toolbar">
-        <label class="btn ghost" for="md-upload" title="Markdown 或 Word（.docx）；Word 的标题、编号、分页、公式会转成对应写法">导入 .md / Word</label>
+        <label class="btn ghost" for="md-upload" title="Markdown 或 Word（.docx）；Word 的标题、编号、分页、居中、缩进、空行、公式会转成对应写法">导入 .md / Word</label>
         <input id="md-upload" type="file" accept=".md,.markdown,.txt,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
         <button class="btn ghost" id="sample-btn">载入示例</button>
         <button class="btn ghost" id="clear-btn">清空</button>
       </div>
       <textarea id="markdown" spellcheck="false" placeholder="# 标题&#10;&#10;正文支持 $行内公式$ 与 $$块级公式$$"></textarea>
       <div class="hint">
-        <span>支持 # 标题、- 列表、1. 编号、$$..$$、$..$、\begin{bmatrix}、--- 分页</span>
+        <span>支持 # 标题、- 列表、1. 编号、$$..$$、$..$、\begin{bmatrix}、--- 分页；行尾 {.center} {.right} {indent=2} {first=2}、&amp;nbsp; 空行</span>
       </div>
       <div id="coverage" class="coverage"></div>
     </div>
@@ -88,7 +88,7 @@
         <label class="field"><span>随机种子</span>
           <input type="number" id="seed" min="0" max="99999" step="1"></label>
         <label class="check"><input type="checkbox" id="page_numbers"> 显示页码</label>
-        <label class="check"><input type="checkbox" id="paper"> 纸张底色</label>
+        <label class="check" title="关闭时背景透明，只画格子和线，打印不会出现灰底"><input type="checkbox" id="paper"> 纸张底色（关 = 透明）</label>
         <label class="check" title="字形和公式以矢量轮廓写入 PDF，放大不失真；纸张只保留底色和渐变，不含颗粒"><input type="checkbox" id="vector_pdf"> 矢量 PDF</label>
         <button class="btn ghost" id="reset-btn">恢复默认</button>
       </div>
@@ -109,7 +109,7 @@
           </select></label>
         <div class="row gap color-row">
           <label class="check"><input type="checkbox" id="paper_color_on"> 纸色</label>
-          <input type="color" id="paper_color" value="#fafafa" title="纸张底色">
+          <input type="color" id="paper_color" value="#fafafa" title="纸色（勾选参数页的「纸张底色」后生效）">
           <label class="check">线色 <input type="color" id="rule_color" value="#7fa3cf"></label>
         </div>
         <label class="field"><span>线条浓度 <b data-out="rule_alpha"></b></span>

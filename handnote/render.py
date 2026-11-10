@@ -140,6 +140,44 @@ def _drop_math_spaces(toks: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return out
 
 
+class _Format:
+    """Per-line left edge of a text block: indents and alignment from ``Block.payload``.
+
+    Indents count characters: one cell on essay paper, otherwise a CJK
+    advance (``size`` plus ``char_spacing``). Lines on cell paper stay on
+    cell boundaries. A block without payload keeps the plain ``base`` indent.
+    """
+
+    def __init__(self, payload: dict, base: int, full: float, size: int, cell: float,
+                 spacing: float):
+        self.align = payload.get("align", "left")
+        self.base, self.full, self.cell = base, full, cell
+        unit = cell or size * (1 + spacing)
+        self.left = float(payload.get("indent", 0.0)) * unit
+        self.first = float(payload.get("first", 0.0)) * unit
+        self.plain = not payload
+
+    def indent(self, first_line: bool) -> float | int:
+        if self.plain:
+            return self.base
+        x = self.base + self.left + (self.first if first_line else 0.0)
+        # Keep at least a quarter of the line for text.
+        x = min(max(0.0, x), self.full * 0.75)
+        return self._snap(x)
+
+    def place(self, indent: float | int, avail: float, width: float) -> float | int:
+        """Left edge of a line ``width`` wide that starts at ``indent``."""
+        if self.align not in ("center", "right") or width >= avail:
+            return indent
+        room = avail - width
+        return indent + self._snap(room / 2 if self.align == "center" else room)
+
+    def _snap(self, x: float) -> float:
+        if self.cell:
+            return math.floor(x / self.cell + 1e-6) * self.cell
+        return x
+
+
 @dataclass
 class _State:
     rng: random.Random
@@ -587,13 +625,21 @@ class Renderer:
                 })
                 continue
 
+            if kind == "blank":
+                lines.append({"kind": "blank", "h": round(cfg.body_size * cfg.line_height)})
+                continue
+
             size = self.heading_size(kind) if kind in ("h1", "h2", "h3") else cfg.body_size
             cell = self.grid.align
-            indent = 0 if cell else (16 if kind == "bullet" else 0)
-            avail = (self.grid.cols * cell if cell else cfg.page_width - 2 * cfg.margin_x) - indent
+            base = 0 if cell else (16 if kind == "bullet" else 0)
+            full = self.grid.cols * cell if cell else cfg.page_width - 2 * cfg.margin_x
+            fmt = _Format(block.payload, base, full, size, cell, cfg.char_spacing)
+            indent = fmt.indent(True)
+            avail = full - indent
             toks = _drop_math_spaces(_tokenize(block.segments))
             cur: list[tuple[str, str]] = []
             x = 0.0
+            ink = 0.0  # x without trailing spaces, for alignment
             gap: float | None = None
             for tok in toks:
                 if tok[0] == "m":
@@ -608,14 +654,19 @@ class Renderer:
                     if tok[0] == "t" and tok[1] and tok[1][0] in _NO_LINE_START:
                         cur.append(tok)
                         x += w
+                        ink = x
                         continue
-                    lines.append(self._text_line(kind, size, indent, cur))
+                    lines.append(self._text_line(kind, size, fmt.place(indent, avail, ink), cur))
                     cur = []
-                    x = 0.0
+                    x = ink = 0.0
+                    indent = fmt.indent(False)
+                    avail = full - indent
                 cur.append(tok)
                 x += w
+                if not (tok[0] == "t" and tok[1].isspace()):
+                    ink = x
             if cur:
-                lines.append(self._text_line(kind, size, indent, cur))
+                lines.append(self._text_line(kind, size, fmt.place(indent, avail, ink), cur))
             if kind in ("h1", "h2"):
                 lines.append({"kind": "gap", "h": 6})
         if self.grid.snap:
@@ -630,6 +681,9 @@ class Renderer:
         kind = line["kind"]
         if kind in ("gap", "pagebreak"):
             line["h"] = 0
+            return
+        if kind == "blank":
+            line["h"] = max(1, round(line["h"] / pitch)) * pitch
             return
         if kind in ("display", "matrix"):
             line["h"] = max(1, math.ceil(line["h"] / pitch - 0.1)) * pitch
@@ -815,25 +869,30 @@ class Renderer:
 
     # -- drawing ----------------------------------------------------------
     def paper(self, state: _State, page_no: int = 1) -> Image.Image:
-        """Page background: tinted grain, printed rules, or a scanned sheet."""
+        """Page background: a scanned sheet, tinted grain, or transparent.
+
+        Without ``paper`` the page is transparent (``paper_color`` is ignored)
+        and only the printed rules are drawn, so a print adds no tint.
+        """
         cfg = self.cfg
         w, h = cfg.page_width, cfg.page_height
         scan = paperlib.background(cfg)
         if scan is not None:
             return scan.convert("RGBA")
         rules = paperlib.rules(cfg, self.grid, page_no)
-        if not cfg.paper and not rules:
-            return Image.new("RGBA", (w, h), (255, 255, 255, 255))
-        if cfg.paper:
-            rng = state.np_rng
-            base = np.asarray(paperlib.paper_rgb(cfg), dtype=np.float32) + 0.5
-            field = np.empty((h, w, 3), dtype=np.float32)
-            field[:] = base
-            field += rng.normal(0, max(cfg.paper_noise, 1e-6), (h, w, 1)).astype(np.float32)
-            gradient = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None, None]
-            field -= cfg.paper_gradient * gradient
-        else:
-            field = np.full((h, w, 3), 255.0, dtype=np.float32)
+        if not paperlib.has_fill(cfg):
+            if not rules:
+                return Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            layer = np.zeros((h, w, 4), dtype=np.float32)
+            paperlib.paint_rules(layer, rules)
+            return paperlib.rgba_image(layer)
+        rng = state.np_rng
+        base = np.asarray(paperlib.paper_rgb(cfg), dtype=np.float32) + 0.5
+        field = np.empty((h, w, 3), dtype=np.float32)
+        field[:] = base
+        field += rng.normal(0, max(cfg.paper_noise, 1e-6), (h, w, 1)).astype(np.float32)
+        gradient = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None, None]
+        field -= cfg.paper_gradient * gradient
         paperlib.paint_rules(field, rules)
         return Image.fromarray(np.clip(field, 0, 255).astype(np.uint8)).convert("RGBA")
 
@@ -973,7 +1032,7 @@ class Renderer:
         origin = self.grid.x0 if cell else float(cfg.margin_x)
         for line in lines:
             kind = line["kind"]
-            if kind == "gap":
+            if kind in ("gap", "blank"):
                 y += line["h"]
                 continue
             if kind == "display":
@@ -1024,7 +1083,7 @@ class Renderer:
 
     # -- public API -------------------------------------------------------
     def render(self, blocks: list[Block]) -> list[Image.Image]:
-        """Render blocks into page images (RGB, one per page)."""
+        """Render blocks into page images (RGBA, one per page; see :meth:`paper`)."""
         with _LOCK:
             pages, state = self._start(blocks)
             return [self.render_page(page, i + 1, len(pages), state)
@@ -1042,7 +1101,7 @@ class Renderer:
             pages, state = self._start(blocks)
             scan = paperlib.background(cfg)
             paper = None
-            if cfg.paper and scan is None:
+            if paperlib.has_fill(cfg) and scan is None:
                 top = tuple(float(c) for c in paperlib.paper_rgb(cfg))
                 paper = (top, tuple(c - cfg.paper_gradient for c in top))
             out: list[VectorPage] = []
@@ -1121,7 +1180,7 @@ class Renderer:
         """Encode page images as a PDF at the configured DPI."""
         if not images:
             raise ValueError("no pages to export")
-        pages = [im.convert("RGB") for im in images]
+        pages = [flatten(im) for im in images]
         buf = io.BytesIO()
         pages[0].save(
             buf, format="PDF", save_all=True, append_images=pages[1:],
@@ -1132,6 +1191,15 @@ class Renderer:
     def coverage(self, blocks: list[Block]) -> dict:
         """Glyph coverage report for a document."""
         return analyze(self.font_path, blocks).to_dict()
+
+
+def flatten(image: Image.Image, rgb: tuple[int, int, int] = (255, 255, 255)) -> Image.Image:
+    """RGB copy of ``image`` laid on ``rgb`` (for JPEG and bitmap PDF, which lack alpha)."""
+    if image.mode != "RGBA":
+        return image.convert("RGB")
+    base = Image.new("RGBA", image.size, rgb + (255,))
+    base.alpha_composite(image)
+    return base.convert("RGB")
 
 
 def render_markdown(text: str, cfg: RenderConfig) -> tuple[list[Image.Image], list[str]]:

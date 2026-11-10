@@ -379,7 +379,13 @@ def _paint_label(field: np.ndarray, r: Rule) -> None:
     m = m[sy0 - y0: sy1 - y0, sx0 - x0: sx1 - x0, None]
     region = field[sy0:sy1, sx0:sx1]
     region *= 1 - m
-    region += np.asarray(r.rgb, dtype=np.float32) * m
+    region += _paint_color(r, field) * m
+
+
+def _paint_color(r: Rule, field: np.ndarray) -> np.ndarray:
+    """``r``'s colour for ``field``: RGB, or premultiplied RGBA with full alpha."""
+    rgb = tuple(r.rgb) + ((255,) if field.shape[2] == 4 else ())
+    return np.asarray(rgb, dtype=np.float32)
 
 
 def _band(center: float, width: float, n: int) -> tuple[int, np.ndarray]:
@@ -404,10 +410,14 @@ def _along(start: float, end: float, n: int, dash: tuple[float, float] | None
 
 
 def paint_rules(field: np.ndarray, items: list[Rule]) -> None:
-    """Blend ``items`` into an ``(h, w, 3)`` float RGB array, anti-aliased."""
+    """Blend ``items`` into a float array, anti-aliased.
+
+    ``field`` is ``(h, w, 3)`` RGB over opaque paper, or ``(h, w, 4)``
+    premultiplied RGBA over a transparent page (see :func:`rgba_image`).
+    """
     h, w = field.shape[:2]
     for r in items:
-        color = np.asarray(r.rgb, dtype=np.float32)
+        color = _paint_color(r, field)
         a = r.alpha / 255.0
         if r.kind == "text":
             _paint_label(field, r)
@@ -441,6 +451,23 @@ def paint_rules(field: np.ndarray, items: list[Rule]) -> None:
         region = field[sl]
         region *= 1 - m
         region += color * m
+
+
+def rgba_image(field: np.ndarray) -> Image.Image:
+    """Premultiplied ``(h, w, 4)`` float RGBA (0-255) -> a straight-alpha RGBA image."""
+    alpha = np.clip(field[..., 3:], 0.0, 255.0)
+    rgb = np.where(alpha > 0, field[..., :3] * 255.0 / np.maximum(alpha, 1e-6), 0.0)
+    out = np.concatenate([np.clip(rgb, 0, 255), alpha], axis=2)
+    return Image.fromarray(np.rint(out).astype(np.uint8), "RGBA")
+
+
+def has_fill(cfg: RenderConfig) -> bool:
+    """Whether the page is filled with paper (``paper_color`` or grey, with grain).
+
+    Otherwise the page is transparent and only the rules, cells and dots are
+    drawn, so printing on real paper adds no tint.
+    """
+    return cfg.paper
 
 
 # -- scanned paper ----------------------------------------------------------

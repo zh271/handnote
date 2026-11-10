@@ -11,7 +11,7 @@ from .capture import build_capture_font
 from .config import RenderConfig
 from .fonts import SOURCES, ensure_font, list_fonts, resolve_font
 from .markdown import parse
-from .render import Renderer
+from .render import Renderer, flatten
 from .symbols import (
     Template,
     build_font,
@@ -74,13 +74,14 @@ def cmd_render(args: argparse.Namespace) -> int:
         if suffix == ".pdf":
             out.write_bytes(renderer.to_pdf(pages))
         elif len(pages) == 1 and suffix in (".png", ".jpg", ".jpeg"):
-            pages[0].convert("RGB").save(out)
+            # PNG keeps the transparent background; JPEG has no alpha.
+            (pages[0] if suffix == ".png" else flatten(pages[0])).save(out)
         else:
             if out.suffix:
                 out = out.with_suffix("")
             out.mkdir(parents=True, exist_ok=True)
             for i, image in enumerate(pages, 1):
-                image.convert("RGB").save(out / f"page-{i}.png")
+                image.save(out / f"page-{i}.png")
     report = renderer.coverage(blocks)
     summary = {
         "out": str(out),
