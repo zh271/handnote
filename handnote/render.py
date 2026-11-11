@@ -143,16 +143,14 @@ def _drop_math_spaces(toks: list[tuple[str, str]]) -> list[tuple[str, str]]:
 class _Format:
     """Per-line left edge of a text block: indents and alignment from ``Block.payload``.
 
-    Indents count characters: one cell on essay paper, otherwise a CJK
-    advance (``size`` plus ``char_spacing``). Lines on cell paper stay on
-    cell boundaries. A block without payload keeps the plain ``base`` indent.
+    Indents count characters of ``unit`` pixels (a cell on essay paper, else
+    the advance of a CJK character). Lines on cell paper stay on cell
+    boundaries. A block without payload keeps the plain ``base`` indent.
     """
 
-    def __init__(self, payload: dict, base: int, full: float, size: int, cell: float,
-                 spacing: float):
+    def __init__(self, payload: dict, base: int, full: float, unit: float, cell: float):
         self.align = payload.get("align", "left")
         self.base, self.full, self.cell = base, full, cell
-        unit = cell or size * (1 + spacing)
         self.left = float(payload.get("indent", 0.0)) * unit
         self.first = float(payload.get("first", 0.0)) * unit
         self.plain = not payload
@@ -633,7 +631,7 @@ class Renderer:
             cell = self.grid.align
             base = 0 if cell else (16 if kind == "bullet" else 0)
             full = self.grid.cols * cell if cell else cfg.page_width - 2 * cfg.margin_x
-            fmt = _Format(block.payload, base, full, size, cell, cfg.char_spacing)
+            fmt = _Format(block.payload, base, full, cell or self._char_unit(size), cell)
             indent = fmt.indent(True)
             avail = full - indent
             toks = _drop_math_spaces(_tokenize(block.segments))
@@ -673,6 +671,10 @@ class Renderer:
             for line in lines:
                 self._snap_line(line)
         return lines
+
+    def _char_unit(self, size: int) -> float:
+        """Advance of a typical CJK character, the unit of layout indents."""
+        return self.char_metrics("\u4e2d", size)[1]
 
     def _snap_line(self, line: dict) -> None:
         """Round a line up to whole rows so every baseline lands on a rule."""
@@ -848,6 +850,9 @@ class Renderer:
                     cur = []
                 y = top
                 i += 1
+                continue
+            if line["kind"] == "blank" and not cur:
+                i += 1  # an empty line does not open a page
                 continue
             need = line["h"]
             nxt = lines[i + 1] if i + 1 < len(lines) else None

@@ -37,7 +37,7 @@ _LONE_ROW_SEP_RE = re.compile(r"(?<!\\)\\(?=\s)")
 _FENCE_RE = re.compile(r"^```")
 _ATTR_ITEM = r"(?:\.(?:left|center|right)|(?:indent|first)=-?\d{1,2}(?:\.\d+)?)"
 _ATTR_RE = re.compile(r"\s*\{\s*(" + _ATTR_ITEM + r"(?:\s+" + _ATTR_ITEM + r")*)\s*\}\s*$")
-_BLANK_RE = re.compile(r"^(?:&nbsp;|\u00a0|<br\s*/?>)$", re.I)
+_BLANK_RE = re.compile(r"^(?:&nbsp;|<br\s*/?>)$", re.I)
 _WIDE_SPACE = "\u3000"
 #: Indents are clamped to this many characters.
 MAX_INDENT = 20.0
