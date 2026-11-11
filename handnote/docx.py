@@ -9,6 +9,11 @@ Standard library only: a .docx is a zip of XML parts. What carries over:
   keep their marker as text. Counters follow Word's levels and restarts.
 - Page breaks (``w:br type=page``, "page break before") -> ``---``.
 - Soft line breaks start a new paragraph, so lines stay where they were.
+- Layout, from the paragraph and its style chain: centred / right
+  alignment -> ``{.center}`` / ``{.right}``; left and first-line (or hanging)
+  indents -> ``{indent=N first=N}`` in characters (``*Chars`` values as is,
+  twips divided by the paragraph's font size); nested list levels indent two
+  characters per level; empty paragraphs -> ``&nbsp;`` lines.
 - Equations (OMML) -> LaTeX: fractions, scripts, radicals, n-ary operators,
   delimiters, functions, accents, matrices (``\\begin{bmatrix}``) and
   equation arrays (one display formula per row).
@@ -34,6 +39,7 @@ M = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
 MAX_BYTES = 50 * 1024 * 1024
 _SENTENCE_END = ("。", "．", ".", "：", ":")
 WIDE_SPACE = "\u3000"
+BLANK = "&nbsp;"
 
 
 class DocxError(ValueError):
@@ -96,11 +102,37 @@ def _on(el: ET.Element | None, tag: str) -> bool:
 class _Styles:
     def __init__(self, root: ET.Element | None):
         self.styles: dict[str, ET.Element] = {}
+        self.default_ppr: ET.Element | None = None
+        self.default_sz = 21  # half-points: 10.5pt, Chinese 五号
+        self.default_para: str | None = None
         if root is not None:
             for st in root.iter(f"{W}style"):
                 sid = st.get(f"{W}styleId")
                 if sid:
                     self.styles[sid] = st
+                    if (st.get(f"{W}type") == "paragraph"
+                            and st.get(f"{W}default") in ("1", "true", "on")):
+                        self.default_para = sid
+            defaults = root.find(f"{W}docDefaults")
+            if defaults is not None:
+                self.default_ppr = defaults.find(f"{W}pPrDefault/{W}pPr")
+                sz = _val(defaults.find(f"{W}rPrDefault/{W}rPr"), f"{W}sz")
+                if sz and sz.isdigit() and int(sz) > 0:
+                    self.default_sz = int(sz)
+
+    def paragraph_props(self, sid: str | None) -> list[ET.Element]:
+        """``pPr`` elements that apply to a paragraph of style ``sid``, base first."""
+        chain = [st.find(f"{W}pPr") for st in self._chain(sid or self.default_para)]
+        found = [self.default_ppr] + chain[::-1]
+        return [ppr for ppr in found if ppr is not None]
+
+    def font_size(self, sid: str | None) -> int:
+        """Font size of style ``sid`` in half-points."""
+        for st in self._chain(sid or self.default_para):
+            sz = _val(st.find(f"{W}rPr"), f"{W}sz")
+            if sz and sz.isdigit() and int(sz) > 0:
+                return int(sz)
+        return self.default_sz
 
     def _chain(self, sid: str | None):
         seen = set()
@@ -423,6 +455,73 @@ def _tidy_math(tex: str) -> str:
     return re.sub(r"\s{2,}", " ", tex).strip()
 
 
+# -- paragraph layout -------------------------------------------------------------
+_ALIGN = {"center": "center", "right": "right", "end": "right"}
+_LEFT_KEYS = ("left", "start", "leftChars", "startChars")
+_FIRST_KEYS = ("firstLine", "firstLineChars", "hanging", "hangingChars")
+
+
+def _number(text: str | None) -> float | None:
+    try:
+        return float(text) if text is not None else None
+    except ValueError:
+        return None
+
+
+def _layout(props: list[ET.Element], sz: int) -> tuple[str | None, float, float]:
+    """``(align, indent, first)`` from ``pPr`` elements, base first; indents in characters.
+
+    Each later element overrides the alignment and, separately, the left and
+    first-line indents it sets (as Word inherits them). ``*Chars`` values are
+    hundredths of a character; plain values are twips, ``sz`` half-points a character.
+    """
+    align: str | None = None
+    ind: dict[str, float] = {}
+    for ppr in props:
+        jc = _val(ppr, f"{W}jc")
+        if jc is not None:
+            align = _ALIGN.get(jc)
+        el = ppr.find(f"{W}ind")
+        if el is None:
+            continue
+        found = {key: _number(el.get(f"{W}{key}")) for key in _LEFT_KEYS + _FIRST_KEYS}
+        found = {key: value for key, value in found.items() if value is not None}
+        for group in (_LEFT_KEYS, _FIRST_KEYS):
+            if any(key in found for key in group):
+                for key in group:
+                    ind.pop(key, None)
+        ind.update(found)
+
+    twips = sz * 10  # one character of sz half-points
+
+    def chars(names: tuple[str, str]) -> float:
+        hundredths = next((ind[k] for k in names[1::2] if k in ind), None)
+        if hundredths is not None and hundredths != 0:
+            return hundredths / 100
+        value = next((ind[k] for k in names[0::2] if k in ind), None)
+        return (value or 0.0) / twips
+
+    left = chars(("left", "leftChars")) or chars(("start", "startChars"))
+    first = chars(("firstLine", "firstLineChars")) - chars(("hanging", "hangingChars"))
+    return align, _half(left), _half(first)
+
+
+def _half(value: float) -> float:
+    """Round to half a character; tiny indents (spacing tweaks) become 0."""
+    value = round(value * 2) / 2
+    return 0.0 if abs(value) < 0.5 else min(max(value, -20.0), 20.0)
+
+
+def _attrs(align: str | None, indent: float, first: float) -> str:
+    """Markdown attribute list (see :mod:`handnote.markdown`), or ``""``."""
+    items = [f".{align}"] if align else []
+    if indent:
+        items.append(f"indent={indent:g}")
+    if first:
+        items.append(f"first={first:g}")
+    return " {" + " ".join(items) + "}" if items else ""
+
+
 # -- body -------------------------------------------------------------------------
 class _Converter:
     def __init__(self, styles: _Styles, numbering: _Numbering):
@@ -447,9 +546,14 @@ class _Converter:
         for block in self.out:
             if block == "---" and (last in (None, "---")):
                 continue  # no leading or doubled page breaks
+            if block == BLANK and last in (None, "---"):
+                continue  # empty lines at the top of a page
+            if block == "---":
+                while blocks and blocks[-1] == BLANK:
+                    blocks.pop()
             blocks.append(block)
             last = block
-        while blocks and blocks[-1] == "---":
+        while blocks and blocks[-1] in ("---", BLANK):
             blocks.pop()
         return "\n\n".join(blocks) + ("\n" if blocks else "")
 
@@ -500,7 +604,21 @@ class _Converter:
             num = self.styles.numbering(style)
         marker = self.numbering.marker(*num) if num else None
 
+        props = self.styles.paragraph_props(style) + ([ppr] if ppr is not None else [])
+        align, indent, first_indent = _layout(props, self.styles.font_size(style))
+        if marker is not None:
+            # List indents belong to the marker; show nesting instead.
+            indent, first_indent = 2.0 * num[1], 0.0
+
+        dropped = self.images + self.textboxes
         lines, bold = self.runs(p)
+        if not any(isinstance(item, tuple) or item.strip() for item in lines):
+            # An empty paragraph is vertical space; one that only held an
+            # image or ended a section is not.
+            dropped = self.images + self.textboxes > dropped
+            if not dropped and (ppr is None or ppr.find(f"{W}sectPr") is None):
+                self.out.append(BLANK)
+            return
         # runs() records display equations and page breaks as their own items.
         first = True
         for item in lines:
@@ -511,6 +629,11 @@ class _Converter:
             text = item.strip()
             if not text:
                 continue
+            # Indents typed as leading spaces: a full-width one is a character.
+            head = item[:len(item) - len(item.lstrip(" " + WIDE_SPACE))]
+            typed = head.count(WIDE_SPACE) + head.count(" ") // 2
+            attrs = _attrs(align, indent,
+                           _half((first_indent if first else 0.0) + typed))
             if first and level is not None:
                 text = "#" * min(level, 3) + " " + text
             elif first and marker is not None:
@@ -523,7 +646,7 @@ class _Converter:
                     text = label + text
             elif first and bold and len(text) <= 40 and not text.endswith(_SENTENCE_END):
                 text = "### " + text
-            self.out.append(text)
+            self.out.append(text + attrs)
             first = False
 
     def runs(self, p: ET.Element) -> tuple[list, bool]:

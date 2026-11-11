@@ -80,7 +80,7 @@ class RenderConfig:
     size_wobble: float = 1.0
     math_scale: float = 1.12
     display_size: int = 36
-    paper: bool = True
+    paper: bool = False  # tinted grain; off = transparent page (prints clean)
     paper_base: int = 250
     paper_noise: float = 1.6
     paper_gradient: float = 3.0

@@ -6,6 +6,11 @@
 
 调研用 [DiffBrush](https://github.com/dailenson/DiffBrush)（ICCV 2025）整行生成替换现有手写方案。第一步是可选的推理原型（`python -m handnote line …`，只支持英文），不改变 v1.1.0 的任何功能。
 
+另外的改动：
+
+- 背景默认透明：只画稿纸的线和格子，打印不再有灰底；“纸张底色”（`paper`）改为默认关闭，纸色只在它开启时生效。PNG 带透明通道，位图 PDF、JPEG 铺白。
+- 版式：Markdown 支持行尾 `{.center}` / `{.right}` / `{indent=N first=N}`、段首全角空格缩进、`&nbsp;` 空行；导入 Word 时保留居中、右对齐、左/首行/悬挂缩进（含样式继承）、列表层级缩进和空段落。
+
 ## v1.1.0：手写汉字改用 SDT 模型
 
 标签打在 `main` 的 `57007be`（PR #5 合并）。

@@ -1,7 +1,7 @@
 import numpy as np
 
 from handnote.markdown import parse
-from handnote.render import Renderer, render_markdown
+from handnote.render import Renderer, flatten, render_markdown
 
 DOC = """## 例题
 
@@ -75,8 +75,10 @@ def test_pdf_header(cfg):
 
 
 def test_paper_can_be_disabled(cfg):
-    image = Renderer(cfg.replace(paper=False)).render(parse("字"))[0].convert("RGB")
-    assert image.getpixel((0, 0)) == (255, 255, 255)
+    image = Renderer(cfg.replace(paper=False)).render(parse("字"))[0]
+    # No paper: a transparent page that prints white.
+    assert image.mode == "RGBA" and image.getpixel((0, 0))[3] == 0
+    assert flatten(image).getpixel((0, 0)) == (255, 255, 255)
 
 
 def test_body_size_changes_line_count(cfg):
@@ -140,3 +142,20 @@ def test_single_set_formula_matches_plain_textpath(cfg):
     ref = TextPath((0, 0), "$x^2+\\frac{a}{b}$", size=90,
                    prop=FontProperties(size=90)).vertices
     assert np.allclose(ours, ref)
+
+
+def test_cli_png_keeps_alpha_and_jpeg_is_white(tmp_path, font_path):
+    from PIL import Image
+
+    from handnote.cli import main
+
+    src = tmp_path / "note.md"
+    src.write_text("字", encoding="utf-8")
+    small = ["--font", str(font_path), "--set", "page_width=400", "--set", "page_height=500",
+             "--set", "margin_x=40"]
+    assert main(["render", str(src), "-o", str(tmp_path / "a.png"), *small]) == 0
+    assert main(["render", str(src), "-o", str(tmp_path / "a.jpg"), *small]) == 0
+    with Image.open(tmp_path / "a.png") as png:
+        assert png.mode == "RGBA" and png.getpixel((0, 0))[3] == 0
+    with Image.open(tmp_path / "a.jpg") as jpg:
+        assert jpg.mode == "RGB" and min(jpg.getpixel((0, 0))) > 245

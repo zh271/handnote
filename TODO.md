@@ -12,6 +12,17 @@
 - [ ] 扫描纸的竖线/格子检测（目前只测横线，扫描的作文纸不会一字一格）
 - [ ] 双栏、页眉页脚
 
+## 输入
+
+- [x] Word `.docx`：标题、编号、分页、公式；对齐、缩进、空段落
+- [ ] `.txt` 直接当 Markdown 读（编码探测 GBK/UTF-8；行首 `#`、`-` 会被当成语法，需要转义开关）——工作量很小
+- [ ] Web 编辑框粘贴富文本：浏览器剪贴板的 `text/html`（Word、WPS、网页、飞书/语雀都给 HTML）用 stdlib `html.parser` 转成同一套 Markdown（标题、列表、`text-align`、`text-indent`、`<br>`）；Word 粘贴带 `mso-` 样式，公式会变成图片拿不到——性价比最高
+- [ ] `.odt`（LibreOffice / WPS 可另存）：zip + XML，结构与 `.docx` 相近，复用 `_Converter` 的输出；公式是 MathML，需要再写一个 MathML → LaTeX
+- [ ] `.tex` 子集：`\section`、`itemize/enumerate`、`$`/`\[`/`equation`、`\centering`；公式本来就是 LaTeX，但 `align/cases` 渲染器不支持
+- [ ] `.html` / `.md` 带 KaTeX/MathJax：取 `annotation[encoding="application/x-tex"]` 还原公式
+- [ ] 不做：旧版 `.doc`、`.wps`（二进制格式，需外部 LibreOffice `soffice --convert-to docx`，可作为“检测到 soffice 时自动转换”的可选路径）；`.pdf`（要加 pypdf/pdfminer 依赖，只能拿到无结构的文字，公式基本无法还原）；图片 OCR（要模型，违背纯 CPU 小依赖）
+- [ ] `.docx` 余项：表格保持表格（需要渲染器支持表格排版）、两端对齐、段前段后间距、行距倍数、字号映射到标题级别
+
 ## 字体
 
 - [x] 渲染期多套字形：公式逐字形替换、正文与矩阵按套小字体（`glyph_sets` / `glyph_strength`）

@@ -1,6 +1,6 @@
 import pytest
 
-from handnote.markdown import ParseError, parse
+from handnote.markdown import ParseError, parse, split_attrs
 
 
 def kinds(blocks):
@@ -116,3 +116,82 @@ def test_text_after_matrix_is_display_not_error():
     block = parse(f"$${tex}$$")[0]
     assert block.kind == "display"
     assert block.segments == (("m", tex),)
+
+
+# -- layout attributes ----------------------------------------------------------
+@pytest.mark.parametrize("line, text, payload", [
+    ("居中 {.center}", "居中", {"align": "center"}),
+    ("靠右 {.right}", "靠右", {"align": "right"}),
+    ("左 {.left}", "左", {}),
+    ("缩进 {indent=2}", "缩进", {"indent": 2.0}),
+    ("首行 {first=2}", "首行", {"first": 2.0}),
+    ("悬挂 {first=-1.5}", "悬挂", {"first": -1.5}),
+    ("组合 { .center  indent=2 first=1 }", "组合", {"align": "center", "indent": 2.0,
+                                                 "first": 1.0}),
+    ("贴着{.right}", "贴着", {"align": "right"}),
+])
+def test_split_attrs_keys_and_combinations(line, text, payload):
+    assert split_attrs(line) == (text, payload)
+
+
+def test_split_attrs_clamps_and_resets():
+    assert split_attrs("x {indent=99}") == ("x", {"indent": 20.0})
+    assert split_attrs("x {first=-99}") == ("x", {"first": -20.0})
+    assert split_attrs("x {first=99}") == ("x", {"first": 20.0})
+    assert split_attrs("x {indent=-3}") == ("x", {}), "indent is never negative"
+    assert split_attrs("x {indent=0 first=0}") == ("x", {})
+    # A later .left undoes an earlier alignment.
+    assert split_attrs("x {.center .left}") == ("x", {})
+    assert split_attrs("x {.left .right}") == ("x", {"align": "right"})
+
+
+@pytest.mark.parametrize("line", [
+    "集合 {x}", "未知 {.middle}", "没有值 {indent=}", "太大 {indent=999}",
+    r"公式 $\{a\}$", "中间 {.center} 还有字", "{ }",
+])
+def test_malformed_attrs_are_left_alone(line):
+    assert split_attrs(line) == (line, {})
+
+
+def test_math_braces_survive_parse():
+    blocks = parse(r"集合 $A=\{a\}$")
+    assert blocks[0].payload == {}
+    assert blocks[0].segments[-1] == ("m", r"A=\{a\}")
+
+
+def test_attrs_on_headings_bullets_and_numbers():
+    blocks = parse("# 标题 {.center}\n\n- 项目 {indent=2}\n\n3. 步骤 {.right first=1}\n\n"
+                   "普通段落")
+    assert [(b.kind, b.text, b.payload) for b in blocks] == [
+        ("h1", "标题", {"align": "center"}),
+        ("bullet", "• 项目", {"indent": 2.0}),
+        ("num", "3.  步骤", {"align": "right", "first": 1.0}),
+        ("p", "普通段落", {}),
+    ]
+
+
+def test_attrs_on_any_line_of_a_paragraph():
+    blocks = parse("第一行\n第二行 {.center}")
+    assert len(blocks) == 1
+    assert blocks[0].text == "第一行第二行" and blocks[0].payload == {"align": "center"}
+    assert parse("{.center}") == [], "a lone attribute list makes no block"
+
+
+def test_wide_space_lead_is_first_line_indent():
+    (block,) = parse("　　首行缩进两字")
+    assert block.text == "首行缩进两字" and block.payload == {"first": 2.0}
+    (block,) = parse("　　首行 {first=4}")
+    assert block.payload == {"first": 4.0}, "an explicit first= wins over the lead"
+    (block,) = parse("　　首行 {.center}")
+    assert block.payload == {"align": "center", "first": 2.0}
+    (block,) = parse("  普通空格不算")
+    assert block.payload == {}
+
+
+@pytest.mark.parametrize("mark", ["&nbsp;", "<br>", "<br/>", "<BR />"])
+def test_blank_lines(mark):
+    blocks = parse(f"甲\n{mark}\n乙")
+    assert [b.kind for b in blocks] == ["p", "blank", "p"]
+    assert [b.kind for b in parse(f"甲\n\n{mark}\n\n{mark}\n\n乙")] == [
+        "p", "blank", "blank", "p"]
+    assert parse("正文里的 &nbsp; 不算")[0].kind == "p"

@@ -187,7 +187,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, IndexError):
             return self._error("bad page index", 404)
         buffer = io.BytesIO()
-        image.convert("RGB").save(buffer, format="PNG", optimize=True)
+        image.save(buffer, format="PNG", optimize=True)
         return self._send(200, buffer.getvalue(), "image/png")
 
     def _pdf(self, path: str) -> None:

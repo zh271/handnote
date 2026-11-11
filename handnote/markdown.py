@@ -4,6 +4,18 @@ Supported syntax: ``#``/``##``/``###`` headings, paragraphs, ``-``/``*``
 bullets, ``1.`` numbered items, ``$$..$$`` display math, ``$..$`` inline
 math, ``\\begin{bmatrix}`` matrices, ``---`` page breaks and fenced code
 blocks (rendered as plain text).
+
+Layout (what a Word import keeps):
+
+- A trailing attribute list on a heading, paragraph or list item:
+  ``{.center}`` / ``{.right}`` / ``{.left}`` alignment, ``{indent=2}`` left
+  indent and ``{first=2}`` extra first-line indent (negative for a hanging
+  indent), both in characters; combine as ``{.center indent=2}``.
+- Full-width spaces (``\u3000``) leading a paragraph become a first-line
+  indent of one character each.
+- A line holding only ``&nbsp;`` (or ``<br>``) is an empty line.
+
+These land in ``Block.payload`` as ``align`` / ``indent`` / ``first``.
 """
 
 from __future__ import annotations
@@ -23,6 +35,12 @@ _MATRIX_RE = MATRIX_RE
 _ROW_SEP_RE = re.compile(r"\\\\(?:\[[^\]]*\])?")
 _LONE_ROW_SEP_RE = re.compile(r"(?<!\\)\\(?=\s)")
 _FENCE_RE = re.compile(r"^```")
+_ATTR_ITEM = r"(?:\.(?:left|center|right)|(?:indent|first)=-?\d{1,2}(?:\.\d+)?)"
+_ATTR_RE = re.compile(r"\s*\{\s*(" + _ATTR_ITEM + r"(?:\s+" + _ATTR_ITEM + r")*)\s*\}\s*$")
+_BLANK_RE = re.compile(r"^(?:&nbsp;|<br\s*/?>)$", re.I)
+_WIDE_SPACE = "\u3000"
+#: Indents are clamped to this many characters.
+MAX_INDENT = 20.0
 
 
 @dataclass(frozen=True)
@@ -78,6 +96,11 @@ def parse(text: str) -> list[Block]:
             i += 1
             continue
 
+        if _BLANK_RE.match(stripped):
+            blocks.append(Block("blank"))
+            i += 1
+            continue
+
         if _RULE_RE.match(stripped):
             blocks.append(Block("pagebreak"))
             i += 1
@@ -86,7 +109,8 @@ def parse(text: str) -> list[Block]:
         m = _HEADING_RE.match(stripped)
         if m:
             level = min(len(m.group(1)), 3)
-            blocks.append(Block(f"h{level}", parse_inline(m.group(2).strip())))
+            body, fmt = split_attrs(m.group(2).strip())
+            blocks.append(Block(f"h{level}", parse_inline(body), fmt))
             i += 1
             continue
 
@@ -97,14 +121,16 @@ def parse(text: str) -> list[Block]:
 
         m = _BULLET_RE.match(stripped)
         if m:
-            blocks.append(Block("bullet", (("t", "• "),) + parse_inline(m.group(1).strip())))
+            body, fmt = split_attrs(m.group(1).strip())
+            blocks.append(Block("bullet", (("t", "• "),) + parse_inline(body), fmt))
             i += 1
             continue
 
         m = _NUMBER_RE.match(stripped)
         if m:
             marker = f"{m.group(1)}.  "
-            blocks.append(Block("num", (("t", marker),) + parse_inline(m.group(2).strip())))
+            body, fmt = split_attrs(m.group(2).strip())
+            blocks.append(Block("num", (("t", marker),) + parse_inline(body), fmt))
             i += 1
             continue
 
@@ -114,6 +140,7 @@ def parse(text: str) -> list[Block]:
                 i += 1
                 continue
 
+        lead = len(raw.lstrip(" \t>")) - len(raw.lstrip(" \t>").lstrip(_WIDE_SPACE))
         para = [stripped]
         i += 1
         while i < n:
@@ -122,17 +149,50 @@ def parse(text: str) -> list[Block]:
                 break
             para.append(nxt)
             i += 1
+        fmt: dict[str, Any] = {}
+        for k, line in enumerate(para):
+            para[k], found = split_attrs(line)
+            fmt.update(found)
+        para = [line for line in para if line]
+        if lead and "first" not in fmt:
+            fmt["first"] = float(min(lead, MAX_INDENT))
+        if not para:
+            continue  # a lone attribute list
         segments = parse_inline(_join_lines(para))
         if (len(segments) == 1 and segments[0][0] == "m"
                 and _MATRIX_RE.search(segments[0][1])):
             # A lone ``$\begin{bmatrix}..$`` line reads as display math.
             blocks.extend(_display_blocks(segments[0][1]))
             continue
-        blocks.append(Block("p", segments))
+        blocks.append(Block("p", segments, fmt))
 
     if in_fence and fence_buf:
         blocks.append(Block("p", (("t", "\n".join(fence_buf)),)))
     return blocks
+
+
+def split_attrs(line: str) -> tuple[str, dict[str, Any]]:
+    """Strip a trailing ``{.center indent=2}`` list; returns ``(text, payload)``.
+
+    Text without a well-formed list (``{x}``, ``$\\{a\\}$``) is left alone.
+    """
+    m = _ATTR_RE.search(line)
+    if not m:
+        return line, {}
+    fmt: dict[str, Any] = {}
+    for item in m.group(1).split():
+        if item.startswith("."):
+            if item != ".left":
+                fmt["align"] = item[1:]
+            else:
+                fmt.pop("align", None)
+            continue
+        key, value = item.split("=")
+        low = -MAX_INDENT if key == "first" else 0.0
+        amount = min(max(float(value), low), MAX_INDENT)
+        if amount:
+            fmt[key] = amount
+    return line[:m.start()].rstrip(), fmt
 
 
 def _is_special(line: str) -> bool:
@@ -144,6 +204,7 @@ def _is_special(line: str) -> bool:
         or _FENCE_RE.match(line)
         or line.startswith("$$")
         or line.startswith(">")
+        or _BLANK_RE.match(line)
     )
 
 
