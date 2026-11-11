@@ -865,6 +865,9 @@ class Renderer:
                 pages.append(cur)
                 cur = []
                 y = top
+                if line["kind"] == "blank":
+                    i += 1  # ... nor does one that overflows
+                    continue
             cur.append(line)
             y += line["h"]
             i += 1

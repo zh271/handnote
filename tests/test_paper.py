@@ -6,7 +6,7 @@ from PIL import Image
 from handnote import paper
 from handnote.config import RenderConfig
 from handnote.markdown import parse
-from handnote.render import Renderer
+from handnote.render import Renderer, flatten
 
 TEXT = ("# 标题\n\n正文第一行，写得长一点好让它换行。abc 和公式 $x^2$ 混排。"
         "\n\n$$a+b=c$$\n\n最后一行")
@@ -53,7 +53,8 @@ def test_baselines_land_on_rules(cfg, name):
 def test_rules_are_printed_where_the_grid_says(cfg):
     page = _with(cfg, "lined", paper=False, page_numbers=False)
     renderer = Renderer(page)
-    image = np.asarray(renderer.render(parse("字"))[0].convert("RGB")).astype(int)
+    # Without paper the page is transparent; lay it on white like a print.
+    image = np.asarray(flatten(renderer.render(parse("字"))[0])).astype(int)
     g = renderer.grid
     rows = g.rows()
     y = int(g.rule(rows[-1]))
@@ -77,7 +78,8 @@ def test_essay_paper_puts_one_character_per_cell(cfg):
 
 
 def test_vector_pdf_has_rules_and_colour(cfg):
-    pdf = Renderer(_with(cfg, "eyecare")).pdf(parse(TEXT))
+    # paper_color only fills the page with paper on (the default is transparent).
+    pdf = Renderer(_with(cfg, "eyecare", paper=True)).pdf(parse(TEXT))
     assert b"/DeviceRGB" in pdf and b"%PDF" in pdf
     plain = Renderer(cfg).pdf(parse(TEXT))
     assert len(pdf) > len(plain)
@@ -165,3 +167,64 @@ def test_cell_alignment_is_optional(cfg):
     assert squares.char_metrics("中", 20)[1] == pytest.approx(g.cell)
     plain_grid = Renderer(_with(cfg, "grid", cell_snap=False))
     assert not plain_grid.grid.align
+
+
+# -- transparent page (paper off, the default) ----------------------------------
+def test_default_page_is_transparent(cfg):
+    assert RenderConfig().paper is False
+    image = Renderer(cfg).render(parse("字"))[0]
+    assert image.mode == "RGBA"
+    alpha = np.asarray(image)[..., 3]
+    assert alpha[0, 0] == 0 and alpha[-1, -1] == 0
+    assert alpha.max() > 0, "the writing itself is opaque"
+
+
+def test_rules_on_a_transparent_page(cfg):
+    page = _with(cfg, "lined", page_numbers=False)
+    renderer = Renderer(page)
+    image = renderer.render(parse("字"))[0]
+    assert image.mode == "RGBA"
+    alpha = np.asarray(image)[..., 3].astype(int)
+    y = int(round(renderer.grid.rule(renderer.grid.rows()[-1])))
+    x = page.page_width // 2
+    assert alpha[y - 1: y + 2, x].max() > 0, "rule rows are drawn"
+    assert alpha[y + 8, x] == 0 and alpha[0, 0] == 0, "no fill between rules"
+    # Rules keep their colour (straight alpha, not darkened by premultiplying).
+    r, g, b, _ = np.asarray(image)[y - 1: y + 2, x].astype(int).max(axis=0)
+    assert b > r + 20
+
+
+def test_paper_colour_needs_paper(cfg):
+    off = Renderer(_with(cfg, "eyecare", page_numbers=False)).render(parse("字"))[0]
+    assert off.getpixel((0, 0))[3] == 0, "paper_color is ignored without paper"
+    on = Renderer(_with(cfg, "eyecare", paper=True)).render(parse("字"))[0]
+    alpha = np.asarray(on)[..., 3]
+    assert alpha.min() == 255, "paper on gives an opaque page"
+    r, g, b, _ = on.getpixel((5, 5))
+    assert r > b + 10, "tinted (#f5eed6), not white"
+
+
+def test_flatten_and_bitmap_pdf_are_white(cfg):
+    import io
+    import re
+
+    renderer = Renderer(_with(cfg, "lined", page_numbers=False))
+    image = renderer.render(parse("字"))[0]
+    flat = flatten(image)
+    assert flat.mode == "RGB" and flat.size == image.size
+    assert flat.getpixel((0, 0)) == (255, 255, 255)
+    assert flatten(image.convert("RGB")).mode == "RGB"
+    pdf = renderer.to_pdf([image])
+    m = re.search(rb"/DCTDecode.*?stream\r?\n", pdf, re.S)
+    assert m, "Pillow stores RGB pages as JPEG"
+    embedded = Image.open(io.BytesIO(pdf[m.end():]))
+    assert embedded.mode == "RGB"
+    assert min(embedded.getpixel((0, 0))) > 245, "transparent areas print white"
+
+
+def test_vector_pdf_fills_only_with_paper(cfg):
+    # Content streams are compressed; the shading object itself is not.
+    blocks = parse(TEXT)
+    assert b"/ShadingType" not in Renderer(_with(cfg, "lined")).pdf(blocks)
+    assert b"/ShadingType" not in Renderer(_with(cfg, "eyecare")).pdf(blocks)
+    assert b"/ShadingType" in Renderer(_with(cfg, "lined", paper=True)).pdf(blocks)

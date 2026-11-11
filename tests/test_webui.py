@@ -1,3 +1,4 @@
+import io
 import json
 import threading
 import urllib.error
@@ -5,6 +6,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 import pytest
+from PIL import Image
 
 from handnote.symbols import build_template, simulate_scan
 
@@ -87,6 +89,9 @@ def test_render_and_preview(server):
     status, headers, png = _request(server, data["pages"][0]["url"])
     assert status == 200 and headers["Content-Type"] == "image/png"
     assert png.startswith(b"\x89PNG")
+    with Image.open(io.BytesIO(png)) as preview:
+        # Paper is off by default: the preview keeps its transparent background.
+        assert preview.mode == "RGBA" and preview.getpixel((0, 0))[3] == 0
 
     status, headers, pdf = _request(server, data["pdf"])
     assert status == 200 and pdf.startswith(b"%PDF")

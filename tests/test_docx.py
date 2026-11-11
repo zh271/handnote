@@ -80,7 +80,9 @@ def test_numbering_bullets_and_chinese_markers():
             + _p("圆点", num=(2, 0)) + _p("第一部分", num=(3, 0)) + _p("第二部分", num=(3, 0))
             + _p("经样式编号", "ListNumber"))
     lines = _md(body).splitlines()[::2]
-    assert lines == ["1. 甲", "a) 子项", "b) 子项二", "2. 乙", "a) 再子项", "- 圆点",
+    # Nested levels indent two characters per level (``{indent=2}``).
+    assert lines == ["1. 甲", "a) 子项 {indent=2}", "b) 子项二 {indent=2}", "2. 乙",
+                     "a) 再子项 {indent=2}", "- 圆点",
                      "一、第一部分", "二、第二部分", "3. 经样式编号"]
     kinds = [b.kind for b in parse("\n\n".join(lines))]
     assert kinds[:3] == ["num", "p", "p"] and kinds[5] == "bullet"
@@ -210,3 +212,117 @@ def test_every_emitted_command_parses_in_mathtext():
     commands |= {f"\\{f} x" for f in _FUNCS} | {"a&b"}
     for tex in sorted(commands):
         parser.parse(f"${tex}$")
+
+
+# -- alignment, indents and empty paragraphs ----------------------------------------
+def _pp(text: str, ppr: str) -> str:
+    """A paragraph with raw ``pPr`` children."""
+    return f'<w:p><w:pPr>{ppr}</w:pPr><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
+
+
+LAYOUT_STYLES = f"""<w:styles {NS}>
+  <w:docDefaults>
+    <w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault>
+    <w:pPrDefault><w:pPr><w:ind w:firstLine="480"/></w:pPr></w:pPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/>
+    <w:pPr><w:ind w:left="480"/></w:pPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Base2"><w:name w:val="Base2"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr><w:ind w:left="960" w:firstLineChars="100"/></w:pPr>
+    <w:rPr><w:sz w:val="32"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/>
+    <w:basedOn w:val="Base2"/><w:pPr><w:jc w:val="center"/></w:pPr></w:style>
+</w:styles>"""
+
+
+def _payloads(md: str) -> list[tuple[str, str, dict]]:
+    return [(b.kind, b.text, b.payload) for b in parse(md)]
+
+
+def test_alignment():
+    md = _md(_pp("居中", '<w:jc w:val="center"/>') + _pp("靠右", '<w:jc w:val="right"/>')
+             + _pp("末端", '<w:jc w:val="end"/>') + _pp("两端", '<w:jc w:val="both"/>'))
+    assert md.split("\n\n") == ["居中 {.center}", "靠右 {.right}", "末端 {.right}", "两端\n"]
+    assert _payloads(md) == [("p", "居中", {"align": "center"}),
+                             ("p", "靠右", {"align": "right"}),
+                             ("p", "末端", {"align": "right"}), ("p", "两端", {})]
+
+
+def test_heading_keeps_alignment():
+    md = _md(_pp("总标题", '<w:pStyle w:val="Title"/><w:jc w:val="center"/>'))
+    assert md == "# 总标题 {.center}\n"
+    assert _payloads(md) == [("h1", "总标题", {"align": "center"})]
+
+
+def test_first_line_and_hanging_indents():
+    md = _md(_pp("二字", '<w:ind w:firstLine="420"/>')
+             + _pp("字符优先", '<w:ind w:firstLineChars="200" w:firstLine="999"/>')
+             + _pp("悬挂", '<w:ind w:left="840" w:hanging="420"/>')
+             + _pp("悬挂字符", '<w:ind w:hangingChars="150"/>')
+             + _pp("微调", '<w:ind w:firstLine="50"/>')
+             + _pp("零字符回退", '<w:ind w:leftChars="0" w:left="420"/>'))
+    assert md.split("\n\n") == ["二字 {first=2}", "字符优先 {first=2}",
+                                "悬挂 {indent=4 first=-2}", "悬挂字符 {first=-1.5}",
+                                "微调", "零字符回退 {indent=2}\n"]
+    assert [b.payload for b in parse(md)] == [
+        {"first": 2.0}, {"first": 2.0}, {"indent": 4.0, "first": -2.0}, {"first": -1.5},
+        {}, {"indent": 2.0}]
+
+
+def test_indents_follow_the_style_chain():
+    md = _md(_p("默认") + _p("引文", "Quote")
+             + _pp("段落覆盖左缩进", '<w:pStyle w:val="Quote"/><w:ind w:left="0"/>')
+             + _pp("段落覆盖首行", '<w:pStyle w:val="Base2"/><w:ind w:firstLine="0"/>'),
+             styles=LAYOUT_STYLES)
+    assert md.split("\n\n") == [
+        # docDefaults first line (480 twips) + default style left (480), 12pt = 240 twips.
+        "默认 {indent=2 first=2}",
+        # basedOn Base2: left 960 at its 16pt, firstLineChars replaces the default.
+        "引文 {.center indent=3 first=1}",
+        "段落覆盖左缩进 {.center first=1}",
+        "段落覆盖首行 {indent=3}\n"]
+    assert _payloads(md) == [
+        ("p", "默认", {"indent": 2.0, "first": 2.0}),
+        ("p", "引文", {"align": "center", "indent": 3.0, "first": 1.0}),
+        ("p", "段落覆盖左缩进", {"align": "center", "first": 1.0}),
+        ("p", "段落覆盖首行", {"indent": 3.0})]
+
+
+def test_list_items_indent_by_level_not_by_ind():
+    hanging = '<w:ind w:left="840" w:hanging="420"/>'
+    md = _md(_p("一", num=(1, 0))
+             + _pp("二", '<w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr>' + hanging)
+             + _pp("点", '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr>' + hanging))
+    assert md.split("\n\n") == ["1. 一", "a) 二 {indent=2}", "- 点\n"]
+    assert _payloads(md) == [("num", "1.  一", {}), ("p", "a) 二", {"indent": 2.0}),
+                             ("bullet", "• 点", {})]
+
+
+def test_typed_leading_spaces_are_first_line_indent():
+    md = _md(_p("　　两个全角") + _p("    四个空格")
+             + _pp("　加在样式上", '<w:ind w:firstLine="420"/>'))
+    assert md.split("\n\n") == ["两个全角 {first=2}", "四个空格 {first=2}",
+                                "加在样式上 {first=3}\n"]
+    assert [b.payload for b in parse(md)] == [{"first": 2.0}, {"first": 2.0},
+                                              {"first": 3.0}]
+
+
+def test_empty_paragraphs_become_blank_lines():
+    page = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
+    image = '<w:p><w:r><w:drawing><wp/></w:drawing></w:r></w:p>'
+    section = '<w:p><w:pPr><w:sectPr/></w:pPr></w:p>'
+    body = (_p() + _p("甲") + _p() + _p() + _p("乙") + _p() + page + _p() + _p("丙")
+            + image + _p("丁") + section + _p("戊") + _p() + _p())
+    result = docx_to_markdown(_docx(body))
+    assert result.markdown.split("\n\n") == [
+        "甲", "&nbsp;", "&nbsp;", "乙", "---", "丙", "丁", "戊\n"]
+    assert result.warnings == ["1 张图片没有导入"]
+    kinds = [b.kind for b in parse(result.markdown)]
+    assert kinds == ["p", "blank", "blank", "p", "pagebreak", "p", "p", "p"]
+
+
+def test_blank_before_page_break_before_is_dropped():
+    body = (_p("甲") + _p()
+            + '<w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>新页</w:t></w:r></w:p>')
+    assert _md(body) == "甲\n\n---\n\n新页\n"
