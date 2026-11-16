@@ -119,3 +119,45 @@ def resolve_font(path: str | None) -> Path:
             "no font available: pass --font /path/to/font.ttf or run "
             "`python -m handnote fonts fetch zhimang`"
         ) from exc
+
+
+def upload_dir() -> Path:
+    """Where the web UI keeps uploaded and built fonts: ``var/uploads`` in the start directory."""
+    return Path.cwd() / "var" / "uploads"
+
+
+def find_font(name: str | None, extra_dirs: list[Path] | None = None) -> Path:
+    """Pick a font for export.
+
+    ``name`` may be a font key (``zhimang``), a file name or stem, a label
+    from :func:`list_fonts` or a path. Empty picks the newest handwritten
+    font (``merged-*``) in ``extra_dirs``, else the newest one there.
+    """
+    fonts = list_fonts(extra_dirs)
+    uploads = [f for f in fonts if f["source"] == "upload"]  # newest first
+    if not name:
+        merged = [f for f in uploads if Path(f["path"]).name.startswith("merged-")]
+        if merged or uploads:
+            return Path((merged or uploads)[0]["path"])
+        raise FileNotFoundError("还没有构建或导入过字体；先在手写页构建，或写出字体名")
+    if name in SOURCES:
+        path = CACHE_DIR / SOURCES[name][0]
+        if path.is_file():
+            return path
+        raise FileNotFoundError(f"font {name!r} is not downloaded: handnote fonts fetch {name}")
+    for f in fonts:
+        path = Path(f["path"])
+        if name in (path.name, path.stem, f["name"]):
+            return path
+    path = Path(name).expanduser()
+    if path.is_file():
+        return path
+    raise FileNotFoundError(f"font not found: {name}")
+
+
+def export_name(path: Path) -> str:
+    """ASCII file name for a downloaded copy; built fonts get a dated name."""
+    if path.name.startswith("merged-"):
+        stamp = time.strftime("%Y%m%d-%H%M", time.localtime(path.stat().st_mtime))
+        return f"handnote-handwriting-{stamp}{path.suffix}"
+    return path.name

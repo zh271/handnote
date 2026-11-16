@@ -15,12 +15,13 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .. import __version__
 from ..capture import build_capture_font
 from ..config import RenderConfig
-from ..fonts import list_fonts, resolve_font
+from ..docx import DocxError, docx_to_markdown
+from ..fonts import export_name, find_font, list_fonts, resolve_font
 from ..markdown import ParseError, parse
 from ..paper import presets as paper_presets
 from ..render import Renderer
@@ -39,6 +40,19 @@ _MIME = {
     ".png": "image/png",
     ".json": "application/json; charset=utf-8",
 }
+
+
+
+def _attachment(name: str) -> str:
+    """``Content-Disposition`` for a download named ``name``.
+
+    HTTP headers are latin-1, so a non-ASCII name (``我的字体.ttf``) goes in the
+    RFC 5987 ``filename*`` form, with an ASCII-only ``filename`` for old clients.
+    """
+    ascii_name = re.sub(r'[^\x20-\x7e]|["\\]', "_", name)
+    if ascii_name == name:
+        return f'attachment; filename="{name}"'
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
 
 
 class Store:
@@ -131,6 +145,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._template_pdf(query, as_json=True)
             if path.startswith("/api/font-file/"):
                 return self._font_file(path)
+            if path == "/api/font-export":
+                return self._font_export(query)
             return self._error("not found", 404)
         except Exception as exc:  # noqa: BLE001 - surface message to the UI
             return self._error(f"{type(exc).__name__}: {exc}", 500)
@@ -148,7 +164,25 @@ class Handler(BaseHTTPRequestHandler):
         if UPLOAD_DIR.resolve() != target.parent or not target.is_file():
             return self._error("not found", 404)
         return self._send(200, target.read_bytes(), "font/ttf",
-                          {"Content-Disposition": f'attachment; filename="{name}"'})
+                          {"Content-Disposition": _attachment(name)})
+
+    def _font_export(self, query: dict[str, list[str]]) -> None:
+        """Download a font from the picker (``path``), or the newest handwritten one.
+
+        Only fonts :func:`list_fonts` lists are served, never arbitrary files.
+        """
+        wanted = (query.get("path") or [""])[0]
+        known = {str(Path(f["path"]).resolve()) for f in list_fonts([UPLOAD_DIR])}
+        try:
+            target = find_font(wanted or None, [UPLOAD_DIR]).resolve()
+        except FileNotFoundError as exc:
+            return self._error(str(exc), 404)
+        if str(target) not in known:
+            return self._error("not found", 404)
+        ctype = "font/otf" if target.suffix.lower() == ".otf" else "font/ttf"
+        name = export_name(target)
+        return self._send(200, target.read_bytes(), ctype,
+                          {"Content-Disposition": _attachment(name)})
 
     def _guide_font(self, query: dict[str, list[str]]) -> None:
         chars = query.get("chars", [""])[0] or all_symbols()
@@ -321,8 +355,6 @@ class Handler(BaseHTTPRequestHandler):
         if kind == "markdown":
             name = (part.filename or "").lower()
             if name.endswith((".docx", ".doc")) or part.data[:2] == b"PK":
-                from ..docx import DocxError, docx_to_markdown
-
                 try:
                     result = docx_to_markdown(part.data)
                 except DocxError as exc:

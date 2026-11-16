@@ -608,19 +608,25 @@ class Renderer:
             if kind == "display":
                 tex = block.segments[0][1] if block.segments else ""
                 img, _ = self.math_image(tex, cfg.display_size)
-                lines.append({"kind": "display", "tex": tex, "img": img,
-                              "h": img.height + 26})
+                line = {"kind": "display", "tex": tex, "img": img, "h": img.height + 26}
+                if block.payload:
+                    line["x"] = self._block_left(block.payload, img.width)
+                lines.append(line)
                 continue
             if kind == "matrix":
                 rows = block.payload.get("rows") or [[""]]
                 _, _, _, mat_h = self.matrix_metrics(rows)
-                lines.append({
+                line = {
                     "kind": "matrix",
                     "prefix": block.payload.get("prefix", ""),
                     "rows": rows,
                     "env": block.payload.get("env", "bmatrix"),
                     "h": mat_h + 2 * cfg.body_size,
-                })
+                }
+                if "align" in block.payload or "indent" in block.payload:
+                    width = self.matrix_width(line["prefix"], rows)
+                    line["cx"] = self._block_left(block.payload, width) + width / 2
+                lines.append(line)
                 continue
 
             if kind == "blank":
@@ -671,6 +677,36 @@ class Renderer:
             for line in lines:
                 self._snap_line(line)
         return lines
+
+    def matrix_width(self, prefix: str, rows: list[list[str]]) -> float:
+        """Width :meth:`draw_matrix` gives a matrix and its prefix."""
+        size = self.cfg.body_size
+        width = self.matrix_metrics(rows)[2]
+        if prefix:
+            width += self.math_image(prefix, size + 10)[0].width + size * self.cfg.matrix_gap
+        return width
+
+    def _block_left(self, payload: dict, width: float) -> float:
+        """Left edge of a display formula or matrix ``width`` wide.
+
+        Centred on the page unless ``payload`` says otherwise; ``indent``
+        (characters of body text) narrows the text area from the left.
+        """
+        cfg = self.cfg
+        cell = self.grid.align
+        origin = self.grid.x0 if cell else float(cfg.margin_x)
+        full = self.grid.cols * cell if cell else cfg.page_width - 2 * cfg.margin_x
+        unit = cell or self._char_unit(cfg.body_size)
+        left = origin + min(max(0.0, float(payload.get("indent", 0.0)) * unit), full * 0.75)
+        right = origin + full
+        align = payload.get("align", "center")
+        if align == "left":
+            return left
+        if align == "right":
+            return max(left, right - width)
+        if "indent" not in payload:
+            return (cfg.page_width - width) / 2
+        return left + max(0.0, (right - left - width) / 2)
 
     def _char_unit(self, size: int) -> float:
         """Advance of a typical CJK character, the unit of layout indents."""
@@ -1045,13 +1081,13 @@ class Renderer:
                 continue
             if kind == "display":
                 img = line["img"]
-                self._place_math(canvas, line["tex"], cfg.display_size,
-                                 (int((cfg.page_width - img.width) / 2), int(y + 14)))
+                x = line.get("x", (cfg.page_width - img.width) / 2)
+                self._place_math(canvas, line["tex"], cfg.display_size, (int(x), int(y + 14)))
                 y += line["h"]
                 continue
             if kind == "matrix":
                 self.draw_matrix(canvas, line["prefix"], line["rows"], line["env"],
-                                 cfg.page_width / 2, y + 8, state)
+                                 line.get("cx", cfg.page_width / 2), y + 8, state)
                 y += line["h"]
                 continue
             size = line["size"]

@@ -8,7 +8,8 @@ blocks (rendered as plain text).
 Layout (what a Word import keeps):
 
 - A trailing attribute list on a heading, paragraph or list item:
-  ``{.center}`` / ``{.right}`` / ``{.left}`` alignment, ``{indent=2}`` left
+  ``{.center}`` / ``{.right}`` / ``{.left}`` alignment (display formulas and
+  matrices are centred unless marked; they take ``align`` and ``indent``), ``{indent=2}`` left
   indent and ``{first=2}`` extra first-line indent (negative for a hanging
   indent), both in characters; combine as ``{.center indent=2}``.
 - Full-width spaces (``\u3000``) leading a paragraph become a first-line
@@ -115,8 +116,8 @@ def parse(text: str) -> list[Block]:
             continue
 
         if stripped.startswith("$$"):
-            math, i = _read_display_math(lines, i)
-            blocks.extend(_display_blocks(math))
+            math, i, fmt = _read_display_math(lines, i)
+            blocks.extend(_display_blocks(math, fmt))
             continue
 
         m = _BULLET_RE.match(stripped)
@@ -162,7 +163,7 @@ def parse(text: str) -> list[Block]:
         if (len(segments) == 1 and segments[0][0] == "m"
                 and _MATRIX_RE.search(segments[0][1])):
             # A lone ``$\begin{bmatrix}..$`` line reads as display math.
-            blocks.extend(_display_blocks(segments[0][1]))
+            blocks.extend(_display_blocks(segments[0][1], fmt))
             continue
         blocks.append(Block("p", segments, fmt))
 
@@ -182,10 +183,7 @@ def split_attrs(line: str) -> tuple[str, dict[str, Any]]:
     fmt: dict[str, Any] = {}
     for item in m.group(1).split():
         if item.startswith("."):
-            if item != ".left":
-                fmt["align"] = item[1:]
-            else:
-                fmt.pop("align", None)
+            fmt["align"] = item[1:]
             continue
         key, value = item.split("=")
         low = -MAX_INDENT if key == "first" else 0.0
@@ -218,19 +216,23 @@ def _join_lines(lines: Iterable[str]) -> str:
     return out
 
 
-def _read_display_math(lines: list[str], i: int) -> tuple[str, int]:
-    """Read a ``$$`` block that may span lines. Returns (math, next index)."""
-    first = lines[i].strip()
+def _read_display_math(lines: list[str], i: int) -> tuple[str, int, dict[str, Any]]:
+    """Read a ``$$`` block that may span lines.
+
+    Returns ``(math, next index, layout)``; a layout list after the closing
+    ``$$`` (``$$x$$ {.left}``) is stripped into ``layout``.
+    """
+    first, fmt = split_attrs(lines[i].strip())
     if len(first) > 4 and first.endswith("$$"):
-        return first[2:-2].strip(), i + 1
+        return first[2:-2].strip(), i + 1, fmt
     body = [first[2:]]
     i += 1
     while i < len(lines):
-        line = lines[i]
-        if line.strip().endswith("$$"):
-            body.append(line.strip()[:-2])
-            return "\n".join(body).strip(), i + 1
-        body.append(line)
+        line, fmt = split_attrs(lines[i].strip())
+        if line.endswith("$$"):
+            body.append(line[:-2])
+            return "\n".join(body).strip(), i + 1, fmt
+        body.append(lines[i])
         i += 1
     raise ParseError(f"unterminated $$ math block ending near line {i - len(body) + 1}")
 
@@ -256,24 +258,26 @@ def matrix_rows(body: str) -> list[list[str]]:
     return [r + [""] * (width - len(r)) for r in rows]
 
 
-def _display_blocks(math: str) -> list[Block]:
+def _display_blocks(math: str, fmt: dict[str, Any] | None = None) -> list[Block]:
     """Turn one display-math payload into display and/or matrix blocks.
 
     ``prefix \\begin{bmatrix}..\\end{bmatrix}`` becomes a hand-drawn matrix
     block. Anything more involved (text after the matrix, several matrices)
     stays a display formula; the renderer composes matrices inside it.
+    ``fmt`` (``align`` / ``indent``) goes into the payload.
     """
+    fmt = {k: v for k, v in (fmt or {}).items() if k in ("align", "indent")}
     matches = list(_MATRIX_RE.finditer(math))
     if not matches:
-        return [Block("display", (("m", math),))]
+        return [Block("display", (("m", math),), fmt)]
     m = matches[0]
     prefix = math[: m.start()].strip()
     suffix = math[m.end():].strip().rstrip(".,;，。；").strip()
     rows = matrix_rows(m.group(2))
     if len(matches) > 1 or suffix or not rows:
-        return [Block("display", (("m", math),))]
+        return [Block("display", (("m", math),), fmt)]
     return [Block("matrix", (("m", prefix),) if prefix else (),
-                  {"prefix": prefix, "rows": rows, "env": m.group(1)})]
+                  {"prefix": prefix, "rows": rows, "env": m.group(1), **fmt})]
 
 
 def parse_inline(text: str) -> tuple[tuple[str, str], ...]:

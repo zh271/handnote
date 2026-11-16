@@ -23,6 +23,8 @@
     </label>
     <label class="btn ghost" for="font-upload">导入字体</label>
     <input id="font-upload" type="file" accept=".ttf,.otf,.ttc" hidden>
+    <a class="btn ghost" id="font-export" href="/api/font-export" download
+       title="下载当前选中的字体文件，可安装到系统里在 Word、WPS 中使用">导出字体</a>
     <button id="render-btn" class="btn primary">渲染</button>
     <span id="status" class="status">就绪</span>
   </div>

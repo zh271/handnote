@@ -37,6 +37,11 @@ async function api(path, options) {
   return body;
 }
 
+// The 导出字体 link downloads whatever font is selected.
+function syncExport() {
+  $("font-export").href = "/api/font-export?path=" + encodeURIComponent($("font-select").value);
+}
+
 function setStatus(text) {
   $("status").textContent = text;
 }
@@ -309,6 +314,9 @@ async function boot() {
     event.target.value = ""; // allow importing the same file again
   });
 
+  $("font-select").addEventListener("change", syncExport);
+  syncExport();
+
   $("font-upload").addEventListener("change", async (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -321,6 +329,7 @@ async function boot() {
       option.textContent = data.name;
       $("font-select").appendChild(option);
       $("font-select").value = data.path;
+      syncExport();
       schedule(100);
     } catch (err) { setStatus("字体导入失败: " + err.message); }
   });
@@ -378,6 +387,7 @@ function bindSymbols() {
       option.textContent = data.font.split(/[\\/]/).pop();
       $("font-select").appendChild(option);
       $("font-select").value = data.font;
+      syncExport();
       schedule(100);
     } catch (err) {
       box.textContent = "构建失败: " + err.message;

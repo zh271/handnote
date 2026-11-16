@@ -621,10 +621,12 @@ class _Converter:
             return
         # runs() records display equations and page breaks as their own items.
         first = True
+        opening = True  # the first-line indent belongs to the paragraph's first line only
         for item in lines:
             if isinstance(item, tuple):
+                # The heading or list marker stays on the first text line:
+                # text after a display formula continues the same item.
                 self.out.append(item[1])
-                first = True
                 continue
             text = item.strip()
             if not text:
@@ -633,7 +635,8 @@ class _Converter:
             head = item[:len(item) - len(item.lstrip(" " + WIDE_SPACE))]
             typed = head.count(WIDE_SPACE) + head.count(" ") // 2
             attrs = _attrs(align, indent,
-                           _half((first_indent if first else 0.0) + typed))
+                           _half((first_indent if opening else 0.0) + typed))
+            opening = False
             if first and level is not None:
                 text = "#" * min(level, 3) + " " + text
             elif first and marker is not None:
@@ -682,11 +685,13 @@ class _Converter:
                         state["text"] = True
                 elif tag == f"{M}oMathPara":
                     flush()
+                    jc = _val(child.find(f"{M}oMathParaPr"), f"{M}jc")
+                    mark = {"left": " {.left}", "right": " {.right}"}.get(jc or "", "")
                     for omath in child.iter(f"{M}oMath"):
                         for row in self.math.rows(omath):
                             row = _tidy_math(row)
                             if row:
-                                items.append(("block", f"$${row}$$"))
+                                items.append(("block", f"$${row}$${mark}"))
 
         def run(r: ET.Element) -> None:
             rpr = r.find(f"{W}rPr")

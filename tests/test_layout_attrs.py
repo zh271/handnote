@@ -170,3 +170,132 @@ def test_blank_line_mid_page_adds_height(cfg):
     assert [line["kind"] for line in page] == ["p", "blank", "p"]
     (plain,) = renderer.paginate(renderer.layout(parse("甲\n\n乙")))
     assert sum(line["h"] for line in page) > sum(line["h"] for line in plain)
+
+
+# -- .left on text, marks on display formulas and matrices ------------------------
+def test_explicit_left_equals_no_align(cfg):
+    for preset in ("plain", "essay"):
+        renderer = Renderer(cfg.replace(**paper.preset(preset)))
+        for text in ("短句", LONG, "- 项目", "## 标题", "1. 步骤"):
+            plain = renderer.layout(parse(text))
+            left = renderer.layout(parse(text + " {.left}"))
+            assert left == plain, (preset, text)
+
+
+MATRIX = r"$$M=\begin{bmatrix}1&0\\0&1\end{bmatrix}$$"
+
+
+def _text_area(renderer, cfg):
+    cell = renderer.grid.align
+    origin = renderer.grid.x0 if cell else float(cfg.margin_x)
+    full = renderer.grid.cols * cell if cell else cfg.page_width - 2 * cfg.margin_x
+    return origin, full
+
+
+def test_unmarked_formulas_have_no_position_keys(cfg):
+    renderer = Renderer(cfg)
+    (display,) = renderer.layout(parse("$$x+y$$"))
+    (matrix,) = renderer.layout(parse(MATRIX))
+    assert "x" not in display and "cx" not in matrix
+    # first= alone is dropped by the parser, so it does not move the formula either.
+    (first,) = renderer.layout(parse("$$x+y$$ {first=2}"))
+    assert "x" not in first
+
+
+def test_display_formula_alignment(cfg):
+    renderer = Renderer(cfg)
+    origin, full = _text_area(renderer, cfg)
+    unit = renderer.char_metrics("中", cfg.body_size)[1]
+
+    def x_of(text):
+        (line,) = renderer.layout(parse(text))
+        return line["x"], line["img"].width
+
+    x, w = x_of("$$x+y$$ {.left}")
+    assert x == pytest.approx(origin)
+    x, w = x_of("$$x+y$$ {.left indent=2}")
+    assert x == pytest.approx(origin + 2 * unit)
+    x, w = x_of("$$x+y$$ {.right}")
+    assert x + w == pytest.approx(origin + full)
+    x, w = x_of("$$x+y$$ {.center}")
+    assert x == pytest.approx((cfg.page_width - w) / 2)
+    # Centred in what is left after the indent.
+    x, w = x_of("$$x+y$$ {.center indent=4}")
+    left = origin + 4 * unit
+    assert x == pytest.approx(left + (origin + full - left - w) / 2)
+    assert x_of("$$x+y$$ {indent=4}")[0] == pytest.approx(x), "align defaults to centre"
+    # Right alignment never goes left of the indent; the indent is capped at 75%.
+    x, w = x_of("$$x+y$$ {.right indent=20}")
+    assert x >= origin + min(20 * unit, 0.75 * full) - 1e-6
+    assert x == pytest.approx(max(origin + min(20 * unit, 0.75 * full), origin + full - w))
+
+
+def test_matrix_alignment_uses_its_drawn_width(cfg, monkeypatch):
+    renderer = Renderer(cfg)
+    origin, full = _text_area(renderer, cfg)
+    (left,) = renderer.layout(parse(MATRIX + " {.left}"))
+    (right,) = renderer.layout(parse(MATRIX + " {.right}"))
+    width = renderer.matrix_width(left["prefix"], left["rows"])
+    assert width > renderer.matrix_metrics(left["rows"])[2], "the prefix counts"
+    assert left["cx"] - width / 2 == pytest.approx(origin)
+    assert right["cx"] + width / 2 == pytest.approx(origin + full)
+
+    # draw_matrix is handed cx and spans exactly matrix_width around it.
+    seen = []
+    original = Renderer.draw_matrix
+
+    def spy(self, canvas, prefix, rows, env, x_center, top, state):
+        seen.append((x_center, self.matrix_width(prefix, rows)))
+        return original(self, canvas, prefix, rows, env, x_center, top, state)
+
+    monkeypatch.setattr(Renderer, "draw_matrix", spy)
+    renderer.render(parse(MATRIX + " {.right}"))
+    renderer.render(parse(MATRIX))
+    assert seen[0] == (pytest.approx(right["cx"]), pytest.approx(width))
+    assert seen[1][0] == pytest.approx(cfg.page_width / 2)
+
+
+def test_matrix_width_matches_draw_matrix_without_prefix(cfg):
+    renderer = Renderer(cfg)
+    rows = [["1", "0"], ["0", "1"]]
+    assert renderer.matrix_width("", rows) == pytest.approx(renderer.matrix_metrics(rows)[2])
+
+
+@pytest.mark.parametrize("name", ["essay", "tianzi"])
+def test_formula_indent_counts_cells(cfg, name):
+    renderer = Renderer(cfg.replace(**paper.preset(name)))
+    cell = renderer.grid.align
+    (line,) = renderer.layout(parse("$$x+y$$ {.left indent=2}"))
+    assert line["x"] == pytest.approx(renderer.grid.x0 + 2 * cell)
+
+
+def _ink_columns(cfg, text):
+    page = Renderer(cfg.replace(page_numbers=False)).render(parse(text))[0]
+    alpha = np.asarray(page)[..., 3]
+    return np.nonzero(alpha.max(axis=0))[0]
+
+
+def test_marked_formulas_move_their_ink(cfg):
+    left = _ink_columns(cfg, "$$x+y=z$$ {.left}")
+    right = _ink_columns(cfg, "$$x+y=z$$ {.right}")
+    assert left.max() < cfg.page_width / 2 < right.min()
+    left = _ink_columns(cfg, MATRIX + " {.left}")
+    right = _ink_columns(cfg, MATRIX + " {.right}")
+    assert left.max() < cfg.page_width / 2 < right.min()
+
+
+def test_unmarked_formulas_render_as_before(cfg):
+    # .center without indent is the old page-centred position, to the byte.
+    for text in ("$$x+y$$", MATRIX):
+        plain = Renderer(cfg).render(parse(text))[0].tobytes()
+        assert Renderer(cfg).render(parse(text + " {.center}"))[0].tobytes() == plain
+    (display,) = parse("$$x+y$$ {first=2}")
+    plain = Renderer(cfg).render(parse("$$x+y$$"))[0].tobytes()
+    assert Renderer(cfg).render([display])[0].tobytes() == plain
+
+
+def test_deterministic_with_formula_marks(cfg):
+    text = "$$x+y$$ {.left}\n\n" + MATRIX + " {.right indent=2}"
+    a = Renderer(cfg).render(parse(text))[0].tobytes()
+    b = Renderer(cfg).render(parse(text))[0].tobytes()
+    assert a == b

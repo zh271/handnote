@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
 from .capture import build_capture_font
 from .config import RenderConfig
-from .fonts import SOURCES, ensure_font, list_fonts, resolve_font
+from .fonts import (
+    SOURCES,
+    ensure_font,
+    export_name,
+    find_font,
+    list_fonts,
+    resolve_font,
+    upload_dir,
+)
 from .markdown import parse
 from .render import Renderer, flatten
 from .symbols import (
@@ -185,7 +194,21 @@ def cmd_fonts(args: argparse.Namespace) -> int:
         for key in args.names or list(SOURCES):
             print(ensure_font(key))
         return 0
-    print(json.dumps(list_fonts(), ensure_ascii=False, indent=1))
+    if args.action == "export":
+        if len(args.names) > 1:
+            raise SystemExit("export takes one font name (none: newest handwritten font)")
+        try:
+            src = find_font(args.names[0] if args.names else None, [upload_dir()])
+        except FileNotFoundError as exc:
+            raise SystemExit(str(exc)) from exc
+        out = Path(args.out or "out")
+        if out.suffix.lower() not in (".ttf", ".otf", ".ttc"):
+            out = out / export_name(src)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, out)
+        print(json.dumps({"from": str(src), "out": str(out)}, ensure_ascii=False, indent=1))
+        return 0
+    print(json.dumps(list_fonts([upload_dir()]), ensure_ascii=False, indent=1))
     return 0
 
 
@@ -435,9 +458,12 @@ def build_parser() -> argparse.ArgumentParser:
     ss.add_argument("--font")
     ss.set_defaults(func=cmd_symbols_simulate)
 
-    f = sub.add_parser("fonts", help="list or download bundled fonts")
-    f.add_argument("action", choices=["list", "fetch"], nargs="?", default="list")
-    f.add_argument("names", nargs="*", help=f"font keys: {', '.join(SOURCES)}")
+    f = sub.add_parser("fonts", help="list, download or export fonts")
+    f.add_argument("action", choices=["list", "fetch", "export"], nargs="?", default="list")
+    f.add_argument("names", nargs="*",
+                   help=f"fetch: font keys ({', '.join(SOURCES)}); export: one key, file name "
+                        "or path (default: your newest handwritten font)")
+    f.add_argument("-o", "--out", help="export: target .ttf/.otf file or folder (default out/)")
     f.set_defaults(func=cmd_fonts)
 
     h = sub.add_parser("hanzi", help="handwritten Chinese characters (fine-tuned SDT model)")
