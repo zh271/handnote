@@ -122,7 +122,7 @@ def test_text_after_matrix_is_display_not_error():
 @pytest.mark.parametrize("line, text, payload", [
     ("居中 {.center}", "居中", {"align": "center"}),
     ("靠右 {.right}", "靠右", {"align": "right"}),
-    ("左 {.left}", "左", {}),
+    ("左 {.left}", "左", {"align": "left"}),
     ("缩进 {indent=2}", "缩进", {"indent": 2.0}),
     ("首行 {first=2}", "首行", {"first": 2.0}),
     ("悬挂 {first=-1.5}", "悬挂", {"first": -1.5}),
@@ -140,8 +140,8 @@ def test_split_attrs_clamps_and_resets():
     assert split_attrs("x {first=99}") == ("x", {"first": 20.0})
     assert split_attrs("x {indent=-3}") == ("x", {}), "indent is never negative"
     assert split_attrs("x {indent=0 first=0}") == ("x", {})
-    # A later .left undoes an earlier alignment.
-    assert split_attrs("x {.center .left}") == ("x", {})
+    # The last alignment wins; .left is kept so formulas can tell it from the default.
+    assert split_attrs("x {.center .left}") == ("x", {"align": "left"})
     assert split_attrs("x {.left .right}") == ("x", {"align": "right"})
 
 
@@ -195,3 +195,49 @@ def test_blank_lines(mark):
     assert [b.kind for b in parse(f"甲\n\n{mark}\n\n{mark}\n\n乙")] == [
         "p", "blank", "blank", "p"]
     assert parse("正文里的 &nbsp; 不算")[0].kind == "p"
+
+
+# -- layout marks on display formulas -------------------------------------------
+def test_mark_after_single_line_display():
+    blocks = parse("前文\n\n$$x^2$$ {.left}\n\n后文")
+    assert [(b.kind, b.payload) for b in blocks] == [
+        ("p", {}), ("display", {"align": "left"}), ("p", {})]
+    assert blocks[1].segments == (("m", "x^2"),)
+    (block,) = parse(r"$$\{a\}$$ {.right}")
+    assert block.segments == (("m", r"\{a\}"),) and block.payload == {"align": "right"}
+
+
+def test_mark_on_closing_line_of_multiline_display():
+    (block,) = parse("$$\na+b\n=c\n$$ {.right indent=2}")
+    assert block.kind == "display"
+    assert block.segments == (("m", "a+b\n=c"),)
+    assert block.payload == {"align": "right", "indent": 2.0}
+    (block,) = parse("$$a+b\n=c$$ {.left}")
+    assert block.segments == (("m", "a+b\n=c"),) and block.payload == {"align": "left"}
+
+
+def test_display_keeps_only_align_and_indent():
+    (block,) = parse("$$x$$ {.center indent=2 first=3}")
+    assert block.payload == {"align": "center", "indent": 2.0}
+    (block,) = parse("$$x$$ {first=3}")
+    assert block.payload == {}
+    (block,) = parse("$$x$$")
+    assert block.payload == {}
+
+
+def test_marks_on_matrices_merge_with_rows():
+    (block,) = parse(r"$$M=\begin{bmatrix}1&0\\0&1\end{bmatrix}$$ {.right first=1}")
+    assert block.kind == "matrix"
+    assert block.payload == {"prefix": "M=", "rows": [["1", "0"], ["0", "1"]],
+                             "env": "bmatrix", "align": "right"}
+    (block,) = parse(r"$\begin{pmatrix}a&b\\c&d\end{pmatrix}$ {.left indent=1}")
+    assert block.kind == "matrix"
+    assert block.payload == {"prefix": "", "rows": [["a", "b"], ["c", "d"]],
+                             "env": "pmatrix", "align": "left", "indent": 1.0}
+    (block,) = parse(r"$$\begin{bmatrix}1\end{bmatrix}$$")
+    assert set(block.payload) == {"prefix", "rows", "env"}
+
+
+def test_unterminated_display_still_raises_with_marks():
+    with pytest.raises(ParseError):
+        parse("$$\na+b {.left}\n")

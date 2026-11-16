@@ -462,3 +462,118 @@ def test_hanzi_model_jobs(server, toy_hanzi, monkeypatch, tmp_path):
     assert _request(server, report["url"])[0] == 200
     code, err = _post(server, "/api/hanzi/model/generate", {"capture": capture, "targets": "abc"})
     assert code == 400
+
+
+# -- font export ----------------------------------------------------------------
+def _fake_font(folder, name, age=0.0):
+    import os
+    import time
+
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_bytes(b"\0\1\0\0" + name.encode() * 8)
+    stamp = time.time() - 900 - age
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def _disposition(headers):
+    import re
+
+    m = re.search(r'filename="([^"]+)"', headers.get("Content-Disposition", ""))
+    return m.group(1) if m else None
+
+
+def test_font_export_without_fonts_is_404(server, tmp_path, monkeypatch):
+    from handnote.webui import server as module
+
+    monkeypatch.setattr(module, "UPLOAD_DIR", tmp_path / "empty")
+    status, _headers, body = _request(server, "/api/font-export")
+    assert status == 404 and b"error" in body
+
+
+def test_font_export_serves_listed_fonts(server, tmp_path, monkeypatch):
+    import re
+    from urllib.parse import quote
+
+    from handnote.fonts import default_font
+    from handnote.webui import server as module
+
+    uploads = tmp_path / "uploads"
+    monkeypatch.setattr(module, "UPLOAD_DIR", uploads)
+    merged = _fake_font(uploads, "merged-1234abcd.ttf", age=30)
+    newer = _fake_font(uploads, "upload-1.otf", age=0)
+    raw = _fake_font(uploads, "capture-1234abcd.ttf", age=-10)
+
+    # Empty path: the newest handwritten (merged) font, under a dated name.
+    status, headers, body = _request(server, "/api/font-export")
+    assert status == 200 and body == merged.read_bytes()
+    assert headers["Content-Type"] == "font/ttf"
+    assert re.match(r"^handnote-handwriting-\d{8}-\d{4}\.ttf$", _disposition(headers))
+
+    status, headers, body = _request(server, "/api/font-export?path=" + quote(str(newer)))
+    assert status == 200 and body == newer.read_bytes()
+    assert headers["Content-Type"] == "font/otf" and _disposition(headers) == "upload-1.otf"
+
+    cached = default_font()
+    status, headers, body = _request(server, "/api/font-export?path=" + quote(str(cached)))
+    assert status == 200 and len(body) == cached.stat().st_size
+    assert _disposition(headers) == cached.name
+
+    # Anything not in the font list is refused, even if it exists.
+    outside = _fake_font(tmp_path / "elsewhere", "loose.ttf")
+    for wanted in ("/etc/passwd", "../../etc/passwd", str(uploads / ".." / "elsewhere"
+                                                            / "loose.ttf"),
+                   str(outside), str(raw), "capture-1234abcd.ttf", "nope.ttf"):
+        status, _headers, body = _request(server, "/api/font-export?path=" + quote(wanted))
+        assert status == 404, wanted
+        assert b"root:" not in body and b"loose" not in body
+
+
+def test_font_export_returns_a_font_built_in_the_ui(server, tmp_path, monkeypatch):
+    from handnote.webui import server as module
+
+    monkeypatch.setattr(module, "UPLOAD_DIR", tmp_path / "uploads")
+    spec = json.loads(_request(server, "/api/symbols/template.json?cell_mm=12&dpi=150")[2])
+    index = next(cell["index"] for cell in spec["cells"] if cell["char"] == "0")
+    capture = {"cells": [{"index": index, "strokes": [[[0.5, 0.1], [0.2, 0.5], [0.5, 0.9],
+                                                       [0.8, 0.5], [0.5, 0.1]]]}]}
+    payload = json.dumps({"spec": spec, "capture": capture, "merge": True}).encode()
+    status, _headers, raw = _request(server, "/api/symbols/capture", data=payload,
+                                     headers={"Content-Type": "application/json"})
+    assert status == 200, raw
+    built = json.loads(raw)["font"]
+    status, headers, body = _request(server, "/api/font-export")
+    assert status == 200 and body.startswith(b"\0\1\0\0")
+    assert body == open(built, "rb").read()
+    assert _disposition(headers).startswith("handnote-handwriting-")
+
+
+def test_font_export_non_ascii_upload_name(server, tmp_path, monkeypatch):
+    from urllib.parse import quote
+
+    from handnote.webui import server as module
+
+    uploads = tmp_path / "uploads"
+    monkeypatch.setattr(module, "UPLOAD_DIR", uploads)
+    font = _fake_font(uploads, "我的字体.ttf")
+    status, headers, body = _request(server, "/api/font-export?path=" + quote(str(font)))
+    assert status == 200
+    assert body == font.read_bytes(), "the font, not an error message"
+    disposition = headers.get("Content-Disposition", "")
+    assert disposition.startswith("attachment")
+    assert "filename*=UTF-8''" + quote("我的字体.ttf") in disposition
+    assert _disposition(headers).isascii(), "plain filename= is an ASCII fallback"
+
+
+def test_attachment_header():
+    from handnote.webui.server import _attachment
+
+    assert _attachment("handnote-handwriting-20261116-1300.ttf") == (
+        'attachment; filename="handnote-handwriting-20261116-1300.ttf"')
+    quoted = _attachment('my "font".ttf')
+    assert quoted.startswith('attachment; filename="my _font_.ttf"; ')
+    assert quoted.endswith("filename*=UTF-8''my%20%22font%22.ttf")
+    assert quoted.isascii()
+    wide = _attachment("我的字体.ttf")
+    assert wide.isascii() and "filename*=UTF-8''%E6%88%91" in wide

@@ -326,3 +326,65 @@ def test_blank_before_page_break_before_is_dropped():
     body = (_p("甲") + _p()
             + '<w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>新页</w:t></w:r></w:p>')
     assert _md(body) == "甲\n\n---\n\n新页\n"
+
+
+def _math_para(inner: str, jc: str | None = None) -> str:
+    pr = f'<m:oMathParaPr><m:jc m:val="{jc}"/></m:oMathParaPr>' if jc else ""
+    return f"<m:oMathPara>{pr}<m:oMath>{inner}</m:oMath></m:oMathPara>"
+
+
+def _t(text: str) -> str:
+    return f'<w:r><w:t xml:space="preserve">{text}</w:t></w:r>'
+
+
+def test_equation_alignment_carries_over():
+    arr = f"<m:eqArr><m:e>{_r('x=1')}</m:e><m:e>{_r('y=2')}</m:e></m:eqArr>"
+    body = (f"<w:p>{_math_para(_r('a=b'), 'left')}</w:p>"
+            f"<w:p>{_math_para(arr, 'right')}</w:p>"
+            f"<w:p>{_math_para(_r('c'), 'center')}</w:p>"
+            f"<w:p>{_math_para(_r('d'), 'centerGroup')}</w:p>"
+            f"<w:p>{_math_para(_r('e'))}</w:p>")
+    md = _md(body)
+    assert md.split("\n\n") == ["$$a=b$$ {.left}", "$$x=1$$ {.right}", "$$y=2$$ {.right}",
+                                "$$c$$", "$$d$$", "$$e$$\n"]
+    assert [(b.kind, b.payload) for b in parse(md)] == [
+        ("display", {"align": "left"}), ("display", {"align": "right"}),
+        ("display", {"align": "right"}), ("display", {}), ("display", {}), ("display", {})]
+
+
+def test_first_line_indent_only_on_the_opening_line():
+    ind = '<w:pPr><w:ind w:firstLine="420"/></w:pPr>'
+    md = _md(f"<w:p>{ind}{_t('前文')}{_math_para(_r('a'))}{_t('后文')}</w:p>")
+    assert md.split("\n\n") == ["前文 {first=2}", "$$a$$", "后文\n"]
+    # A formula first: the first text line is still the paragraph's opening line.
+    md = _md(f"<w:p>{ind}{_math_para(_r('a'))}{_t('后文')}</w:p>")
+    assert md.split("\n\n") == ["$$a$$", "后文 {first=2}\n"]
+    # Left indent and alignment still apply to every line.
+    ppr = '<w:pPr><w:ind w:left="420" w:firstLine="420"/><w:jc w:val="center"/></w:pPr>'
+    md = _md(f"<w:p>{ppr}{_t('前文')}{_math_para(_r('a'))}{_t('后文')}</w:p>")
+    assert md.split("\n\n") == ["前文 {.center indent=2 first=2}", "$$a$$",
+                                "后文 {.center indent=2}\n"]
+
+
+def test_marker_stays_on_the_first_text_line_around_formulas():
+    num = '<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>'
+    md = _md(f"<w:p>{num}{_t('设')}{_math_para(_r('a'))}{_t('则成立')}</w:p>")
+    assert md.split("\n\n") == ["1. 设", "$$a$$", "则成立\n"]
+    assert [line.startswith("1. ") for line in md.splitlines()].count(True) == 1
+    assert [b.kind for b in parse(md)] == ["num", "display", "p"]
+
+    heading = '<w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+    md = _md(f"<w:p>{heading}{_t('标题')}{_math_para(_r('a'))}{_t('续')}</w:p>")
+    assert md.split("\n\n") == ["# 标题", "$$a$$", "续\n"]
+    assert [b.kind for b in parse(md)] == ["h1", "display", "p"]
+
+
+def test_marker_after_a_leading_formula():
+    num = '<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>'
+    md = _md(f"<w:p>{num}{_math_para(_r('a'))}{_t('首行')}<w:r><w:br/></w:r>{_t('次行')}</w:p>"
+             + _p("下一项", num=(1, 0)))
+    assert md.split("\n\n") == ["$$a$$", "1. 首行", "次行", "2. 下一项\n"]
+    heading = '<w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+    parts = _math_para(_r("a")) + _t("标题") + _math_para(_r("b")) + _t("续")
+    md = _md(f"<w:p>{heading}{parts}</w:p>")
+    assert md.split("\n\n") == ["$$a$$", "# 标题", "$$b$$", "续\n"]

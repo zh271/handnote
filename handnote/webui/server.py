@@ -54,6 +54,7 @@ def _attachment(name: str) -> str:
         return f'attachment; filename="{name}"'
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
 
+
 class Store:
     """In-memory cache for rendered previews and generated templates."""
 
