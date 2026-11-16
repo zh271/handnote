@@ -15,7 +15,7 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .. import __version__
 from ..capture import build_capture_font
@@ -41,6 +41,18 @@ _MIME = {
     ".json": "application/json; charset=utf-8",
 }
 
+
+
+def _attachment(name: str) -> str:
+    """``Content-Disposition`` for a download named ``name``.
+
+    HTTP headers are latin-1, so a non-ASCII name (``我的字体.ttf``) goes in the
+    RFC 5987 ``filename*`` form, with an ASCII-only ``filename`` for old clients.
+    """
+    ascii_name = re.sub(r'[^\x20-\x7e]|["\\]', "_", name)
+    if ascii_name == name:
+        return f'attachment; filename="{name}"'
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
 
 class Store:
     """In-memory cache for rendered previews and generated templates."""
@@ -151,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
         if UPLOAD_DIR.resolve() != target.parent or not target.is_file():
             return self._error("not found", 404)
         return self._send(200, target.read_bytes(), "font/ttf",
-                          {"Content-Disposition": f'attachment; filename="{name}"'})
+                          {"Content-Disposition": _attachment(name)})
 
     def _font_export(self, query: dict[str, list[str]]) -> None:
         """Download a font from the picker (``path``), or the newest handwritten one.
@@ -169,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
         ctype = "font/otf" if target.suffix.lower() == ".otf" else "font/ttf"
         name = export_name(target)
         return self._send(200, target.read_bytes(), ctype,
-                          {"Content-Disposition": f'attachment; filename="{name}"'})
+                          {"Content-Disposition": _attachment(name)})
 
     def _guide_font(self, query: dict[str, list[str]]) -> None:
         chars = query.get("chars", [""])[0] or all_symbols()

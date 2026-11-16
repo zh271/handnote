@@ -624,8 +624,9 @@ class _Converter:
         opening = True  # the first-line indent belongs to the paragraph's first line only
         for item in lines:
             if isinstance(item, tuple):
+                # The heading or list marker stays on the first text line:
+                # text after a display formula continues the same item.
                 self.out.append(item[1])
-                first = True
                 continue
             text = item.strip()
             if not text:
