@@ -31,7 +31,7 @@ ruff check handnote tests
 |---|---|
 | `handnote/config.py` | `RenderConfig`，所有可调参数；`from_mapping` 做类型转换、钳制与校验 |
 | `handnote/docx.py` | Word .docx → Markdown 子集（标准库解析 XML）：标题、编号、分页、软换行、对齐/缩进/空段落（样式链继承）、OMML 公式 → LaTeX（只输出 mathtext 认识的命令，`tests/test_docx.py` 校验） |
-| `handnote/markdown.py` | Markdown 子集 → `Block` 列表；处理 `$..$`、`$$..$$`、矩阵提取、分页；行尾 `{.center indent=2 first=2}` 与 `&nbsp;` 空行进 `Block.payload` / `blank` |
+| `handnote/markdown.py` | Markdown 子集 → `Block` 列表；处理 `$..$`、`$$..$$`、矩阵提取、分页；行尾 `{.center indent=2 first=2}`（块公式、矩阵写在结尾 `$$` 后，只认对齐与 `indent`）与 `&nbsp;` 空行进 `Block.payload` / `blank` |
 | `handnote/variants.py` | 多套字形：确定性轮廓变形、`SetPicker`、按套小字体 `GlyphSets`；手写变体优先 |
 | `handnote/opentype.py` | 手写多套 ↔ GSUB：`read_alternates`（读 `rand`）、`add_alternates`（追加 `rand`/`calt`） |
 | `handnote/coverage.py` | LaTeX → Unicode 映射；对比字体 cmap 报缺字 |
@@ -49,7 +49,7 @@ ruff check handnote tests
 | `handnote/model/generate.py` | `generate`：分套生成、少笔重写（`pick_best`）、摆放（`place`）、压感（`shade`）、断点续跑 |
 | `handnote/model/pressure.py` | 压感回归（numpy）与通用规则 |
 | `handnote/linegen/` | v2 实验：DiffBrush 整行生成（英文）。`weights`（下载/缓存，无 torch）、`style`（参考行、文本校验、均衡换行，无 torch）、`device`（CUDA/ROCm/DirectML/CPU）、`generate`（`LineGenerator`、DDIM）、`bench`（测速与按 FLOPs 估算）、`net/`（vendor 的 DiffBrush，MIT，须能 `strict=True` 加载作者 checkpoint） |
-| `handnote/fonts.py` | 字体缓存目录与下载 |
+| `handnote/fonts.py` | 字体缓存目录与下载；`upload_dir()`（Web 的 `var/uploads`）、`find_font` / `export_name`（导出字体：CLI `fonts export`、`GET /api/font-export`，只发 `list_fonts` 列出的文件） |
 | `handnote/cli.py` | 命令行入口 |
 | `handnote/update.py` | `start.bat` 的 git 快进自更新；只用 stdlib（在装依赖前运行），失败一律跳过不阻塞启动 |
 | `start.bat` | Windows 启动脚本；含 UTF-8 中文，必须 CRLF（`.gitattributes`），LF 会被 cmd 拆行误执行 |
@@ -70,7 +70,7 @@ ruff check handnote tests
 9. **矢量与光栅同源**。`render_vector` 复用 `render_page`，只切换 `_raster` / `_rec`；绘制函数里随机数的调用顺序不得因模式而变。新增绘制代码要同时记录矢量项（`("path"|"stroke"|"image", ...)`），并跑 `tests/test_vector.py`。PDF 不得写入时间戳等非确定内容。
 10. **稿纸网格是排版与画线的唯一来源**。`paper.grid(cfg)` 给出行距、首条线、格子；`Renderer.layout` 按它把行高取整到行距、`paginate` / `render_page` 从 `grid.top` 排到 `grid.bottom`，一字一格只看 `grid.align`（`cell_snap` 关闭时为 0），字数格模式下 `Renderer` 用 `paper.fit_body` 改写正文字号，`paper.rules` 按同一网格画线，矢量 PDF 复用同一组 `Rule`。`plain` 样式必须与旧输出逐字节一致（`tests/test_paper.py::test_plain_preset_matches_the_default_page`）；画线不得消耗 `state.np_rng`。`paper=False`（默认）时页面透明、`paper_color` 不生效：线画在预乘 RGBA 层（`paint_rules` 接受 4 通道、`rgba_image` 还原），矢量 PDF 不铺底；PNG 保留 alpha，位图 PDF 与 JPEG 必须先 `render.flatten` 铺白，不能直接 `convert("RGB")`（透明处会变黑）。
 11. **手写汉字的几何与确定性**。写字格与 makemeahanzi 坐标的映射（`u = x/1024`，`v = (900-y)/1024`）同时被描红、笔顺提示和生成字的摆放（`generate.place` 用 `ref_box`）使用，改动要一起改。生成用逐步取最大值（不采样），第 k 套的风格图由 `data.style_subset(…, (k, attempt))` 决定，所以同一个模型文件 + 同一份采集给出同一份生成结果；`build_hanzi_font` 按码位排序，同一份 JSON 生成同一个字体（`tests/test_hanzi_font.py::test_build_font_has_only_captured_chars`）。vendor 的 SDT 必须能严格加载作者的 checkpoint（`load_state_dict` 全部键匹配），改网络结构前先确认这一点；前缀解码与上游全长解码等价（`tests/test_model.py::test_prefix_decoding_matches_full_length`）。
-12. **版式标记只改行的左缘**。`Block.payload` 的 `align` / `indent` / `first`（单位：字）由 `render._Format` 换算成每行 `line["indent"]`，绘制代码不认识它们；一字一格时一律取整到格。没有 payload 的块必须与旧排版完全一致。
+12. **版式标记只改行的左缘**。`Block.payload` 的 `align` / `indent` / `first`（单位：字）由 `render._Format` 换算成每行 `line["indent"]`（块公式与矩阵由 `_block_left` 换算成 `line["x"]` / `line["cx"]`），绘制代码不认识它们；一字一格时一律取整到格。没有 payload 的块必须与旧排版完全一致。
 
 ## 测试约定
 
