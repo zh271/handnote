@@ -36,6 +36,7 @@ from .config import RenderConfig  # noqa: E402
 from .coverage import analyze  # noqa: E402
 from .fonts import resolve_font  # noqa: E402
 from .markdown import MATRIX_RE, Block, matrix_rows, parse  # noqa: E402
+from .outline import offset_path, weight_offset  # noqa: E402
 from .variants import (  # noqa: E402
     GlyphSets,
     SetPicker,
@@ -43,9 +44,7 @@ from .variants import (  # noqa: E402
     handwritten_outline,
     handwritten_sets,
     make_warp,
-    offset_path,
     warp_points,
-    weight_offset,
 )
 from .vector import (  # noqa: E402
     IDENTITY,

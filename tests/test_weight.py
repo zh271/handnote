@@ -5,8 +5,8 @@ from matplotlib.path import Path as MplPath
 
 from handnote.config import RenderConfig
 from handnote.markdown import parse
+from handnote.outline import is_wide, offset_path, offset_points, weight_offset
 from handnote.render import Renderer
-from handnote.variants import is_wide, offset_path, offset_points, weight_offset
 
 SQUARE_CCW = np.array([(0, 0), (10, 0), (10, 10), (0, 10)], dtype=float)
 

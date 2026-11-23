@@ -43,7 +43,8 @@ handnote/
   coverage.py     LaTeX -> Unicode 映射，对比字体 cmap 报缺字
   render.py       Renderer：layout -> paginate -> render_page / render_vector
   vector.py       矢量页面记录与无依赖的 PDF 写出器
-  variants.py     多套字形：确定性轮廓变形、SetPicker、按套小字体；笔画粗细（轮廓外扩/内缩）
+  variants.py     多套字形：确定性轮廓变形、SetPicker、按套小字体
+  outline.py      笔画粗细：轮廓外扩/内缩，汉字与符号分档
   opentype.py     GSUB 读写：rand / calt 变体
   symbols.py      模板生成、cv2 描摹、assemble_font、merge_fonts
   capture.py      浏览器笔画 JSON 校验、光栅化、build_capture_font
