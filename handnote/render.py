@@ -36,6 +36,7 @@ from .config import RenderConfig  # noqa: E402
 from .coverage import analyze  # noqa: E402
 from .fonts import resolve_font  # noqa: E402
 from .markdown import MATRIX_RE, Block, matrix_rows, parse  # noqa: E402
+from .outline import offset_path, weight_offset  # noqa: E402
 from .variants import (  # noqa: E402
     GlyphSets,
     SetPicker,
@@ -384,8 +385,13 @@ class Renderer:
                               oy * scale))
         rect_codes = np.array([MplPath.MOVETO] + [MplPath.LINETO] * 4 + [MplPath.CLOSEPOLY],
                               dtype=MplPath.code_type)
+        grow = cfg.symbol_weight / 200 * unit
         for n, (ox, oy, w, h) in enumerate(rects):
-            ox += shift(ox)
+            # Fraction bars and radical tops follow the symbol weight.
+            ox += shift(ox) - grow
+            oy -= grow
+            w = max(w + 2 * grow, w * 0.25)
+            h = max(h + 2 * grow, h * 0.25)
             verts.append(np.array([(ox, oy), (ox, oy + h), (ox + w, oy + h),
                                    (ox + w, oy), (ox, oy), (0, 0)], dtype=float))
             codes.append(rect_codes)
@@ -413,29 +419,33 @@ class Renderer:
         """Outline of one mathtext glyph at ``FONT_SCALE`` for set ``k``.
 
         Handwritten sets come from the font's alternates; other sets warp
-        the base outline.
+        the base outline. The stroke weight is applied before the warp.
         """
         cfg = self.cfg
-        key = (font.fname, index, ccode, k, handwritten, cfg.seed, cfg.glyph_strength)
+        delta = weight_offset(ccode, cfg.weight, float(text_to_path.FONT_SCALE))
+        key = (font.fname, index, ccode, k, handwritten, cfg.seed, cfg.glyph_strength, delta)
         hit = self._glyph_paths.get(key)
         if hit is not None:
             return hit
         outline = (handwritten_outline(self.font_path, ccode, k, text_to_path.FONT_SCALE)
                    if handwritten and k > 0 else None)
-        if outline is not None:
-            result = outline
-        elif k == 0 or handwritten:
-            from matplotlib import ft2font
+        if outline is not None or k == 0 or handwritten:
+            if outline is None:
+                from matplotlib import ft2font
 
-            flags = getattr(getattr(ft2font, "LoadFlags", None), "NO_HINTING", None)
-            if flags is None:
-                flags = ft2font.LOAD_NO_HINTING
-            font.clear()
-            font.set_size(text_to_path.FONT_SCALE, text_to_path.DPI)
-            font.load_glyph(index, flags=flags)
-            verts, codes = font.get_path()
-            result = (np.asarray(verts, dtype=float), np.asarray(codes))
+                flags = getattr(getattr(ft2font, "LoadFlags", None), "NO_HINTING", None)
+                if flags is None:
+                    flags = ft2font.LOAD_NO_HINTING
+                font.clear()
+                font.set_size(text_to_path.FONT_SCALE, text_to_path.DPI)
+                font.load_glyph(index, flags=flags)
+                verts, codes = font.get_path()
+                outline = (np.asarray(verts, dtype=float), np.asarray(codes))
+            result = outline
+            if delta:
+                result = (offset_path(outline[0], outline[1], delta), outline[1])
         else:
+            # Set 0 already carries the weight; warp it like body text does.
             verts, codes = self._math_glyph(font, index, ccode, 0)
             keep = codes != _CLOSEPOLY
             warped = verts.copy()
@@ -519,7 +529,7 @@ class Renderer:
         draw = ImageDraw.Draw(out)
         rng = random.Random(f"{cfg.seed}|matrix|{key}|{px}")
         color = cfg.ink_rgb + (min(255, cfg.ink_alpha_max - 20),)
-        stroke = max(1, round(px / 13))
+        stroke = max(1, round(px / 13 + px * cfg.symbol_weight / 100))
         for s in (0, 1):
             bx = side * 0.45 if s == 0 else width - side * 0.45
             self._bracket(draw, bx, pad_y * 0.5, height - pad_y * 0.5, s, env,
@@ -1050,7 +1060,8 @@ class Renderer:
         for side in (0, 1):
             bx = mx + (size * 0.30 if side == 0 else mat_w - size * 0.30)
             self._bracket(draw, bx, top - size * 0.15, top + mat_h + size * 0.1, side,
-                          env, size, rng, color, 3, self._rec)
+                          env, size, rng, color,
+                          max(1, round(3 + size * cfg.symbol_weight / 100)), self._rec)
         for r, row in enumerate(rows):
             for c, cell in enumerate(row):
                 cx = mx + size * 0.65 + c * cell_w + cell_w / 2
@@ -1178,10 +1189,13 @@ class Renderer:
         """Build per-set fonts for every character ``draw_char`` will draw.
 
         Runs before layout so line breaking can measure each set's width.
+        With ``glyph_sets=1`` the mini fonts only carry stroke weight, for
+        the characters whose weight is non-zero.
         """
         cfg = self.cfg
         self._set_width_cache = {}
-        if cfg.glyph_sets <= 1:
+        single = cfg.glyph_sets <= 1
+        if single and not any(cfg.weight):
             self._sets = None
             return
         chars: set[str] = set()
@@ -1194,12 +1208,19 @@ class Renderer:
         if cfg.page_numbers:
             chars.update("0123456789")
         chars = {ch for ch in chars if not ch.isspace()}
+        if single:
+            # One set: only characters whose weight changes leave the base font.
+            chars = {ch for ch in chars if weight_offset(ord(ch), cfg.weight, 1.0)}
+            if not chars:
+                self._sets = None
+                return
         current = self._sets
         if current is not None and {ord(ch) for ch in chars} <= current.codes | current.absent:
             return
         try:
             self._sets = GlyphSets(self.font_path, chars, cfg.glyph_sets,
-                                   cfg.glyph_strength, cfg.seed)
+                                   cfg.glyph_strength, cfg.seed, cfg.weight,
+                                   alternates=not single)
         except Exception as exc:  # noqa: BLE001 - odd fonts fall back to one set
             self._sets = None
             self.warn(f"glyph sets disabled: {type(exc).__name__}: {exc}")

@@ -73,6 +73,10 @@
           <input type="range" id="punct_squeeze" min="0" max="1" step="0.05"></label>
         <label class="field"><span>公式两侧留白 (em) <b data-out="math_gap"></b></span>
           <input type="range" id="math_gap" min="0" max="0.6" step="0.01"></label>
+        <label class="field" title="笔画总共加粗（正）或变细（负）多少，单位是字号的 1%；只影响汉字和全角标点"><span>汉字粗细 (%) <b data-out="hanzi_weight"></b></span>
+          <input type="range" id="hanzi_weight" min="-3" max="6" step="0.25"></label>
+        <label class="field" title="数字、字母、符号的笔画粗细，正文和公式都生效（含分数线、矩阵括号），用来和汉字对齐"><span>符号粗细 (%) <b data-out="symbol_weight"></b></span>
+          <input type="range" id="symbol_weight" min="-3" max="6" step="0.25"></label>
         <label class="field"><span>倾斜抖动 (°) <b data-out="jitter_rot"></b></span>
           <input type="range" id="jitter_rot" min="0" max="4" step="0.05"></label>
         <label class="field"><span>水平抖动 <b data-out="jitter_dx"></b></span>

@@ -426,6 +426,20 @@ python -m handnote fonts export zhimang -o D:/fonts/  # 指定字体与目标文
 
 命令行在哪个目录运行，就在那里的 `var/uploads/` 找 Web 构建的字体，所以要在启动 `serve` 的同一目录下运行。导出的 `.ttf` 双击即可安装到系统，在 Word、WPS 里选用（多套字形在 Word 里需要勾选“上下文替换”，见下一节）。手写汉字用的 SDT 权重仅限研究用途，合并出的字体只作个人使用。
 
+## 笔画粗细
+
+手写符号、数字和字体里的汉字常常一粗一细，放在一起很显眼。两个旋钮分别调：
+
+- `hanzi_weight`：汉字和全角标点；
+- `symbol_weight`：数字、字母和符号，正文和公式里都生效，分数线、根号横线、矩阵括号跟着变。
+
+单位是字号的 1%，表示每一笔总共加粗（正）或变细（负）多少，范围 -3 到 6。只改墨迹，字宽不变，排版和换行不受影响；加得太粗时相邻的字会靠得更近。Web 界面在“参数”页的“汉字粗细”“符号粗细”。
+
+```bash
+python -m handnote render notes.md -o out/a.pdf --set symbol_weight=2      # 符号比汉字细时
+python -m handnote render notes.md -o out/a.pdf --set hanzi_weight=-1.5    # 或者让汉字细一点
+```
+
 ## 多套字形
 
 真人写同一个字，每次都不一样。handnote 每画一个字就随机选一套字形，同一个字不会连续两次用同一套。字形来源有两种：
@@ -476,6 +490,7 @@ python -m handnote render notes.md -o out/a.pdf --set glyph_sets=1     # 关闭�
 | `count_marks` | true | 字数格的累计字数标记和格数页脚 |
 | `paper_image` | 空 | `image` 样式用的纸张图片（`handnote paper scan` 的输出） |
 | `glyph_sets` / `glyph_strength` | 4 / 1.0 | 字形套数（1 为关闭）、合成套之间的差异幅度 |
+| `hanzi_weight` / `symbol_weight` | 0 / 0 | 汉字、符号的笔画粗细（字号的 %，-3 到 6；负值变细），字宽不变 |
 | `seed` | 11 | 随机种子；同一种子、同一输入的输出逐字节一致 |
 | `dpi` | 150 | 页面像素与物理尺寸的换算（150 时默认页面为 A4） |
 | `vector_pdf` | true | PDF 用矢量轮廓；`false` 为页面位图 |

@@ -17,6 +17,9 @@ Two consumers share :func:`warp_points`:
   tiny TrueType font per set (only the characters the page needs) so PIL and
   FreeType rasterise warped glyphs exactly like the original ones;
 * formulas warp the matplotlib glyph paths directly (see ``render.py``).
+
+Both consumers apply the stroke weight (:mod:`handnote.outline`) before the
+warp, so a weighted glyph is warped exactly like the original one.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from matplotlib.path import Path as MplPath
 from PIL import ImageFont
 
 from .opentype import read_alternates
+from .outline import contour_lengths, offset_points, weight_offset
 
 MAX_SETS = 8
 
@@ -255,14 +259,19 @@ def _replay(value: list, points: np.ndarray, pen) -> None:
 
 
 def _warped_glyph(src: _Source, src_key: str, code: int, k: int, seed: int,
-                  strength: float) -> tuple[object, int, int] | None:
-    """Return ``(glyph, advance, lsb)`` for ``code`` in set ``k``."""
-    key = (src_key, code, k, seed, round(strength, 4))
+                  strength: float, alternates: bool = True,
+                  delta: float = 0.0) -> tuple[object, int, int] | None:
+    """Return ``(glyph, advance, lsb)`` for ``code`` in set ``k``.
+
+    ``delta`` grows every stroke by that many font units per side before
+    the warp; the advance width stays the same.
+    """
+    key = (src_key, code, k, seed, round(strength, 4), alternates, round(delta, 3))
     hit = _GLYPHS.get(key)
     if hit is not None:
         _GLYPHS.move_to_end(key)
         return hit
-    if code in src.alternates:
+    if alternates and code in src.alternates:
         name = src.glyph_name(code, k)
         warp = None
     else:
@@ -276,7 +285,10 @@ def _warped_glyph(src: _Source, src_key: str, code: int, k: int, seed: int,
     flat = [arg for _, args in recorder.value for arg in args if arg is not None]
     tt_pen = TTGlyphPen(None)
     if flat:
-        pts = warp_points(np.array(flat, dtype=np.float64), warp, src.upem)
+        pts = np.array(flat, dtype=np.float64)
+        if delta:
+            pts = offset_points(pts, contour_lengths(recorder.value), delta)
+        pts = warp_points(pts, warp, src.upem)
         pen = tt_pen if src.is_ttf else Cu2QuPen(tt_pen, src.upem / 1000,
                                                  reverse_direction=True)
         _replay(recorder.value, pts, pen)
@@ -313,10 +325,16 @@ def _mini_font(src: _Source, entries: dict[int, tuple[object, int, int]]) -> byt
 
 
 class GlyphSets:
-    """Per-set mini fonts for a fixed character set of one source font."""
+    """Per-set mini fonts for a fixed character set of one source font.
+
+    ``weight`` is ``(hanzi, symbol)`` stroke weight in percent of the em (see
+    :func:`handnote.outline.weight_offset`). ``alternates=False`` ignores handwritten sets, so
+    one set with a weight is just the font with heavier or lighter strokes.
+    """
 
     def __init__(self, font_path: str | Path, chars: Iterable[str], sets: int,
-                 strength: float, seed: int):
+                 strength: float, seed: int, weight: tuple[float, float] = (0.0, 0.0),
+                 alternates: bool = True):
         path = Path(font_path)
         self.sets = int(min(max(sets, 1), MAX_SETS))
         src = _source(path)
@@ -325,8 +343,9 @@ class GlyphSets:
         codes = sorted(wanted & set(src.cmap))
         self.codes = frozenset(codes)
         self.absent = frozenset(wanted - self.codes)
-        self._choices = {code: (1 + len(src.alternates[code]) if code in src.alternates
-                                else self.sets) for code in codes}
+        self._choices = {code: (1 + len(src.alternates[code])
+                                if alternates and code in src.alternates else self.sets)
+                         for code in codes}
         slots = max([self.sets, *self._choices.values()])
         self._data: list[bytes] = []
         for k in range(slots):
@@ -334,7 +353,8 @@ class GlyphSets:
             for code in codes:
                 if k >= self._choices[code]:
                     continue
-                built = _warped_glyph(src, src_key, code, k, seed, strength)
+                built = _warped_glyph(src, src_key, code, k, seed, strength, alternates,
+                                      weight_offset(code, weight, src.upem))
                 if built is not None:
                     entries[code] = built
             self._data.append(_mini_font(src, entries))
