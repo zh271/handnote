@@ -43,7 +43,7 @@ handnote/
   coverage.py     LaTeX -> Unicode 映射，对比字体 cmap 报缺字
   render.py       Renderer：layout -> paginate -> render_page / render_vector
   vector.py       矢量页面记录与无依赖的 PDF 写出器
-  variants.py     多套字形：确定性轮廓变形、SetPicker、按套小字体
+  variants.py     多套字形：确定性轮廓变形、SetPicker、按套小字体；笔画粗细（轮廓外扩/内缩）
   opentype.py     GSUB 读写：rand / calt 变体
   symbols.py      模板生成、cv2 描摹、assemble_font、merge_fonts
   capture.py      浏览器笔画 JSON 校验、光栅化、build_capture_font
@@ -245,6 +245,7 @@ python -m pytest tests/test_answer_skill.py -q
 | 浏览器笔画 → TTF | 完成 | `tests/test_capture.py` |
 | 描红对齐、手写替换 | 完成 | `tests/test_align.py`、`tests/test_replace.py` |
 | 合成多套、手写多套（`rand` / `calt`） | 完成 | `tests/test_variants.py`、`tests/test_sets.py` |
+| 笔画粗细（汉字 / 符号两档） | 完成 | `tests/test_weight.py` |
 | 答题 skill 白名单可渲染 | 完成 | `tests/test_answer_skill.py` |
 | Web 界面与 API | 完成 | `tests/test_webui.py` |
 | 扫描件透视校正、自动页序 | 完成 | `tests/test_perspective.py` |

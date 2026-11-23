@@ -49,6 +49,8 @@ _LIMITS: dict[str, tuple[float, float]] = {
     "math_gap": (0.0, 1.0),
     "glyph_sets": (1, 8),
     "glyph_strength": (0.0, 3.0),
+    "hanzi_weight": (-3.0, 6.0),
+    "symbol_weight": (-3.0, 6.0),
 }
 
 
@@ -109,6 +111,10 @@ class RenderConfig:
     math_gap: float = 0.25
     glyph_sets: int = 4
     glyph_strength: float = 1.0
+    # Stroke weight, percent of the font size: hanzi and full-width punctuation,
+    # then digits, letters and symbols (text and formulas, incl. rules/brackets).
+    hanzi_weight: float = 0.0
+    symbol_weight: float = 0.0
     seed: int = 11
     dpi: int = 150
     vector_pdf: bool = True
@@ -161,6 +167,11 @@ class RenderConfig:
         return self
 
     # -- derived values ---------------------------------------------------
+    @property
+    def weight(self) -> tuple[float, float]:
+        """``(hanzi_weight, symbol_weight)``, as :mod:`handnote.variants` takes it."""
+        return self.hanzi_weight, self.symbol_weight
+
     @property
     def ink_rgb(self) -> tuple[int, int, int]:
         """Ink colour as an ``(r, g, b)`` tuple."""

@@ -17,6 +17,12 @@ Two consumers share :func:`warp_points`:
   tiny TrueType font per set (only the characters the page needs) so PIL and
   FreeType rasterise warped glyphs exactly like the original ones;
 * formulas warp the matplotlib glyph paths directly (see ``render.py``).
+
+Stroke weight shares the same two consumers: :func:`offset_points` moves
+every contour outwards (or inwards) by a fixed distance before the warp, so
+digits and symbols can be made as heavy as the font's hanzi. The amount
+comes from :func:`weight_offset`, which splits characters into wide (hanzi,
+full-width punctuation) and everything else.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from __future__ import annotations
 import io
 import math
 import random
+import unicodedata
 from collections import OrderedDict
 from collections.abc import Iterable
 from copy import deepcopy
@@ -103,6 +110,127 @@ def warp_points(points: np.ndarray, warp: Warp | None, em: float,
         out[:, 0] += ax * wave
         out[:, 1] += ay * wave
     return out * em + c
+
+
+# -- stroke weight ------------------------------------------------------------
+
+#: Corners sharper than this (cosine of the turn) are not moved, as in FreeType.
+_SHARP = -0.9375
+
+
+def is_wide(code: int) -> bool:
+    """True for hanzi and other full-width characters (the ``hanzi_weight`` class)."""
+    return unicodedata.east_asian_width(chr(code)) in ("W", "F")
+
+
+def weight_offset(code: int, weight: tuple[float, float], em: float) -> float:
+    """Per-side outline offset for ``code``, in units where one em is ``em``.
+
+    ``weight`` is ``(hanzi, symbol)`` in percent of the em: how much thicker
+    (positive) or thinner (negative) every stroke gets in total.
+    """
+    pct = weight[0] if is_wide(code) else weight[1]
+    return pct / 200.0 * em
+
+
+def _area(points: np.ndarray) -> float:
+    x, y = points[:, 0], points[:, 1]
+    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y))
+
+
+def _offset_contour(pts: np.ndarray, delta: float) -> np.ndarray:
+    """Move one closed contour by ``delta`` along its right-hand normal.
+
+    Each point moves along the bisector of its two edges, so straight edges
+    shift by exactly ``delta``; repeated points move with their neighbour,
+    near-reversals stay put and long spikes are capped at the shorter edge.
+    """
+    n = len(pts)
+    # Representative index of every point among the distinct, cyclic points.
+    rep = np.zeros(n, dtype=int)
+    uniq = [0]
+    for i in range(1, n):
+        if np.any(pts[i] != pts[uniq[-1]]):
+            uniq.append(i)
+        rep[i] = len(uniq) - 1
+    while len(uniq) > 1 and np.all(pts[uniq[-1]] == pts[0]):
+        rep[rep == len(uniq) - 1] = 0
+        uniq.pop()
+    if len(uniq) < 3:
+        return pts.copy()
+    u = pts[uniq]
+    d_in = u - np.roll(u, 1, axis=0)
+    d_out = np.roll(u, -1, axis=0) - u
+    l_in = np.hypot(d_in[:, 0], d_in[:, 1])
+    l_out = np.hypot(d_out[:, 0], d_out[:, 1])
+    e_in = d_in / l_in[:, None]
+    e_out = d_out / l_out[:, None]
+    cos = np.einsum("ij,ij->i", e_in, e_out)
+    normal = np.stack([e_in[:, 1] + e_out[:, 1], -(e_in[:, 0] + e_out[:, 0])], axis=1)
+    sharp = cos <= _SHARP
+    scale = np.where(sharp, 0.0, delta / np.where(sharp, 1.0, 1.0 + cos))
+    shift = normal * scale[:, None]
+    length = np.hypot(shift[:, 0], shift[:, 1])
+    cap = np.minimum(l_in, l_out)
+    over = length > cap
+    shift[over] *= (cap[over] / length[over])[:, None]
+    return pts + shift[rep]
+
+
+def offset_points(points: np.ndarray, lengths: Iterable[int], delta: float) -> np.ndarray:
+    """Grow (``delta > 0``) or thin every stroke of a glyph by ``delta`` per side.
+
+    ``points`` are y-up outline points (control points included) and
+    ``lengths`` the number of points in each closed contour, in order. Outer
+    contours and holes are told apart by the glyph's overall winding, so this
+    works for TrueType and PostScript outlines alike.
+    """
+    pts = np.asarray(points, dtype=np.float64)
+    if delta == 0 or len(pts) == 0:
+        return pts.copy()
+    bounds = np.cumsum([0, *lengths])
+    contours = [pts[a:b] for a, b in zip(bounds[:-1], bounds[1:], strict=True) if b > a]
+    area = sum(_area(c) for c in contours if len(c) > 2)
+    # Filled side on the left of a counter-clockwise (PostScript) outer contour.
+    sign = 1.0 if area >= 0 else -1.0
+    out = pts.copy()
+    for a, b in zip(bounds[:-1], bounds[1:], strict=True):
+        if b - a > 2:
+            out[a:b] = _offset_contour(pts[a:b], sign * delta)
+    return out
+
+
+def offset_path(verts: np.ndarray, codes: np.ndarray, delta: float) -> np.ndarray:
+    """:func:`offset_points` for a matplotlib path; ``CLOSEPOLY`` vertices are kept."""
+    verts = np.asarray(verts, dtype=np.float64)
+    if delta == 0 or len(verts) == 0:
+        return verts.copy()
+    codes = np.asarray(codes)
+    keep = np.flatnonzero(codes != MplPath.CLOSEPOLY)
+    starts = np.flatnonzero(codes[keep] == MplPath.MOVETO)
+    if len(starts) == 0 or starts[0] != 0:
+        starts = np.concatenate([[0], starts])
+    lengths = np.diff(np.concatenate([starts, [len(keep)]]))
+    out = verts.copy()
+    out[keep] = offset_points(verts[keep], lengths.tolist(), delta)
+    return out
+
+
+def _contour_lengths(value: list) -> list[int]:
+    """Point count per contour of a fontTools recording."""
+    lengths: list[int] = []
+    count = 0
+    for op, args in value:
+        if op == "moveTo" and count:
+            lengths.append(count)
+            count = 0
+        count += sum(arg is not None for arg in args)
+        if op in ("closePath", "endPath"):
+            lengths.append(count)
+            count = 0
+    if count:
+        lengths.append(count)
+    return lengths
 
 
 class SetPicker:
@@ -255,14 +383,19 @@ def _replay(value: list, points: np.ndarray, pen) -> None:
 
 
 def _warped_glyph(src: _Source, src_key: str, code: int, k: int, seed: int,
-                  strength: float) -> tuple[object, int, int] | None:
-    """Return ``(glyph, advance, lsb)`` for ``code`` in set ``k``."""
-    key = (src_key, code, k, seed, round(strength, 4))
+                  strength: float, alternates: bool = True,
+                  delta: float = 0.0) -> tuple[object, int, int] | None:
+    """Return ``(glyph, advance, lsb)`` for ``code`` in set ``k``.
+
+    ``delta`` grows every stroke by that many font units per side before
+    the warp; the advance width stays the same.
+    """
+    key = (src_key, code, k, seed, round(strength, 4), alternates, round(delta, 3))
     hit = _GLYPHS.get(key)
     if hit is not None:
         _GLYPHS.move_to_end(key)
         return hit
-    if code in src.alternates:
+    if alternates and code in src.alternates:
         name = src.glyph_name(code, k)
         warp = None
     else:
@@ -276,7 +409,10 @@ def _warped_glyph(src: _Source, src_key: str, code: int, k: int, seed: int,
     flat = [arg for _, args in recorder.value for arg in args if arg is not None]
     tt_pen = TTGlyphPen(None)
     if flat:
-        pts = warp_points(np.array(flat, dtype=np.float64), warp, src.upem)
+        pts = np.array(flat, dtype=np.float64)
+        if delta:
+            pts = offset_points(pts, _contour_lengths(recorder.value), delta)
+        pts = warp_points(pts, warp, src.upem)
         pen = tt_pen if src.is_ttf else Cu2QuPen(tt_pen, src.upem / 1000,
                                                  reverse_direction=True)
         _replay(recorder.value, pts, pen)
@@ -313,10 +449,16 @@ def _mini_font(src: _Source, entries: dict[int, tuple[object, int, int]]) -> byt
 
 
 class GlyphSets:
-    """Per-set mini fonts for a fixed character set of one source font."""
+    """Per-set mini fonts for a fixed character set of one source font.
+
+    ``weight`` is ``(hanzi, symbol)`` stroke weight in percent of the em (see
+    :func:`weight_offset`). ``alternates=False`` ignores handwritten sets, so
+    one set with a weight is just the font with heavier or lighter strokes.
+    """
 
     def __init__(self, font_path: str | Path, chars: Iterable[str], sets: int,
-                 strength: float, seed: int):
+                 strength: float, seed: int, weight: tuple[float, float] = (0.0, 0.0),
+                 alternates: bool = True):
         path = Path(font_path)
         self.sets = int(min(max(sets, 1), MAX_SETS))
         src = _source(path)
@@ -325,8 +467,9 @@ class GlyphSets:
         codes = sorted(wanted & set(src.cmap))
         self.codes = frozenset(codes)
         self.absent = frozenset(wanted - self.codes)
-        self._choices = {code: (1 + len(src.alternates[code]) if code in src.alternates
-                                else self.sets) for code in codes}
+        self._choices = {code: (1 + len(src.alternates[code])
+                                if alternates and code in src.alternates else self.sets)
+                         for code in codes}
         slots = max([self.sets, *self._choices.values()])
         self._data: list[bytes] = []
         for k in range(slots):
@@ -334,7 +477,8 @@ class GlyphSets:
             for code in codes:
                 if k >= self._choices[code]:
                     continue
-                built = _warped_glyph(src, src_key, code, k, seed, strength)
+                built = _warped_glyph(src, src_key, code, k, seed, strength, alternates,
+                                      weight_offset(code, weight, src.upem))
                 if built is not None:
                     entries[code] = built
             self._data.append(_mini_font(src, entries))

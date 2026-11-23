@@ -32,7 +32,7 @@ ruff check handnote tests
 | `handnote/config.py` | `RenderConfig`，所有可调参数；`from_mapping` 做类型转换、钳制与校验 |
 | `handnote/docx.py` | Word .docx → Markdown 子集（标准库解析 XML）：标题、编号、分页、软换行、对齐/缩进/空段落（样式链继承）、OMML 公式 → LaTeX（只输出 mathtext 认识的命令，`tests/test_docx.py` 校验） |
 | `handnote/markdown.py` | Markdown 子集 → `Block` 列表；处理 `$..$`、`$$..$$`、矩阵提取、分页；行尾 `{.center indent=2 first=2}`（块公式、矩阵写在结尾 `$$` 后，只认对齐与 `indent`）与 `&nbsp;` 空行进 `Block.payload` / `blank` |
-| `handnote/variants.py` | 多套字形：确定性轮廓变形、`SetPicker`、按套小字体 `GlyphSets`；手写变体优先 |
+| `handnote/variants.py` | 多套字形：确定性轮廓变形、`SetPicker`、按套小字体 `GlyphSets`；手写变体优先；笔画粗细 `offset_points` / `weight_offset`（汉字 = 东亚宽字符，其余算符号） |
 | `handnote/opentype.py` | 手写多套 ↔ GSUB：`read_alternates`（读 `rand`）、`add_alternates`（追加 `rand`/`calt`） |
 | `handnote/coverage.py` | LaTeX → Unicode 映射；对比字体 cmap 报缺字 |
 | `handnote/render.py` | `Renderer`：layout（测量）→ paginate（分页）→ render_page（绘制）；`char_metrics` / `math_advance` 是 layout 与绘制共用的唯一宽度来源 |
@@ -71,6 +71,7 @@ ruff check handnote tests
 10. **稿纸网格是排版与画线的唯一来源**。`paper.grid(cfg)` 给出行距、首条线、格子；`Renderer.layout` 按它把行高取整到行距、`paginate` / `render_page` 从 `grid.top` 排到 `grid.bottom`，一字一格只看 `grid.align`（`cell_snap` 关闭时为 0），字数格模式下 `Renderer` 用 `paper.fit_body` 改写正文字号，`paper.rules` 按同一网格画线，矢量 PDF 复用同一组 `Rule`。`plain` 样式必须与旧输出逐字节一致（`tests/test_paper.py::test_plain_preset_matches_the_default_page`）；画线不得消耗 `state.np_rng`。`paper=False`（默认）时页面透明、`paper_color` 不生效：线画在预乘 RGBA 层（`paint_rules` 接受 4 通道、`rgba_image` 还原），矢量 PDF 不铺底；PNG 保留 alpha，位图 PDF 与 JPEG 必须先 `render.flatten` 铺白，不能直接 `convert("RGB")`（透明处会变黑）。
 11. **手写汉字的几何与确定性**。写字格与 makemeahanzi 坐标的映射（`u = x/1024`，`v = (900-y)/1024`）同时被描红、笔顺提示和生成字的摆放（`generate.place` 用 `ref_box`）使用，改动要一起改。生成用逐步取最大值（不采样），第 k 套的风格图由 `data.style_subset(…, (k, attempt))` 决定，所以同一个模型文件 + 同一份采集给出同一份生成结果；`build_hanzi_font` 按码位排序，同一份 JSON 生成同一个字体（`tests/test_hanzi_font.py::test_build_font_has_only_captured_chars`）。vendor 的 SDT 必须能严格加载作者的 checkpoint（`load_state_dict` 全部键匹配），改网络结构前先确认这一点；前缀解码与上游全长解码等价（`tests/test_model.py::test_prefix_decoding_matches_full_length`）。
 12. **版式标记只改行的左缘**。`Block.payload` 的 `align` / `indent` / `first`（单位：字）由 `render._Format` 换算成每行 `line["indent"]`（块公式与矩阵由 `_block_left` 换算成 `line["x"]` / `line["cx"]`），绘制代码不认识它们；一字一格时一律取整到格。没有 payload 的块必须与旧排版完全一致。
+13. **笔画粗细只改墨迹**。`hanzi_weight` / `symbol_weight` 在变形之前把轮廓沿法线外扩或内缩（`variants.offset_points`），正文走按套小字体、公式走 `_math_glyph`，位图与矢量共用同一份轮廓；分数线、根号横线、矩阵括号跟 `symbol_weight`。字宽、排版、`state.rng` 的消耗都与不加粗时一致（`tests/test_weight.py::test_weight_keeps_layout_and_random_stream`）。`glyph_sets=1` 时只把权重非零的字送进小字体，并且不启用手写变体；两个权重都为 0 时走原路径，输出逐字节不变。
 
 ## 测试约定
 

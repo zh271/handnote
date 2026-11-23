@@ -3,6 +3,7 @@ const NUMERIC = [
   "symbol_spacing", "punct_squeeze", "math_gap",
   "display_size", "math_scale", "jitter_rot",
   "jitter_dx", "jitter_dy", "ink_alpha_min", "glyph_sets", "glyph_strength",
+  "hanzi_weight", "symbol_weight",
   "paper_noise", "seed",
   "rule_alpha", "rule_width", "rule_pitch", "rule_top", "cell_size",
   "margin_top", "margin_x", "margin_bottom",
